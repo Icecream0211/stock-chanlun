@@ -53,6 +53,8 @@ import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResist
 import type { IndicatorConfig } from '@/stores/chanlun'
 import { calcMA, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
 import { downsampleKlines, klineSeriesSignature } from '@/utils/chartDownsample'
+import { normDateTime } from '@/utils/chartDateUtils'
+import { CHART_PALETTE } from '@/utils/chartPalette'
 import { setChartOptionKeepDataZoom } from '@/utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '@/composables/useDebounce'
 import { useKlineIndicators } from '@/composables/useKlineIndicators'
@@ -87,7 +89,12 @@ const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
 
-const displayKlines = computed(() => downsampleKlines(props.klines))
+const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
+  ...props.bis.flatMap(item => [item.start, item.end]),
+  ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
+  ...props.zhongshus.flatMap(item => [item.start, item.end]),
+  ...props.signals.map(item => item.datetime),
+]))
 const klineIndicators = useKlineIndicators(displayKlines)
 
 let graphicRaf = 0
@@ -127,7 +134,7 @@ function fmtPrice(v: number | null | undefined): string {
 function formatBarLine(idx: number): string {
   if (idx < 0 || idx >= lastDisplayKlines.length) return ''
   const k = lastDisplayKlines[idx]
-  const d = lastDates[idx] ?? k.date.slice(0, 10)
+  const d = lastDates[idx] ?? normDateTime(k.date)
   return `${d}  开 ${fmtPrice(k.open)}  收 ${fmtPrice(k.close)}  高 ${fmtPrice(k.high)}  低 ${fmtPrice(k.low)}  |  MA5 ${fmtPrice(lastMa5[idx])}  MA20 ${fmtPrice(lastMa20[idx])}  MA60 ${fmtPrice(lastMa60[idx])}`
 }
 
@@ -138,8 +145,8 @@ function setBarInfoByIndex(idx: number) {
 }
 
 // ── 颜色常量 ────────────────────────────────────────────────────────────────
-const UP_COLOR = '#ef4444'
-const DOWN_COLOR = '#22c55e'
+const UP_COLOR = CHART_PALETTE.klineUp
+const DOWN_COLOR = CHART_PALETTE.klineDown
 const GRID_COLOR = 'rgba(255,255,255,0.06)'
 const TEXT_COLOR = '#64748b'
 
@@ -249,7 +256,7 @@ function buildOption(chartH: number = 300) {
   if (!klines.length) return {}
 
   lastDisplayKlines = klines
-  const dates = klines.map(k => k.date.slice(0, 10))
+  const dates = klines.map(k => normDateTime(k.date))
   const ohlc = klines.map(k => [k.open, k.close, k.low, k.high])
   const closes = klines.map(k => k.close)
   const ind = getIndicators()
@@ -286,16 +293,16 @@ function buildOption(chartH: number = 300) {
   seriesList.push({
     name: 'K线', type: 'candlestick', data: ohlc,
     xAxisIndex: 0, yAxisIndex: 0, z: 3,
-    itemStyle: { color: UP_COLOR, color0: DOWN_COLOR, borderColor: UP_COLOR, borderColor0: DOWN_COLOR }
+    itemStyle: { color: UP_COLOR, color0: DOWN_COLOR, borderColor: UP_COLOR, borderColor0: DOWN_COLOR, borderWidth: 1 }
   })
 
   // 均线
   if (ind.ma5) seriesList.push({ name: 'MA5', type: 'line', data: lastMa5, xAxisIndex: 0, yAxisIndex: 0,
-    lineStyle: { width: 1, color: '#f0b429' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
+    lineStyle: { width: 1.35, color: CHART_PALETTE.ma5, opacity: 0.95 }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
   if (ind.ma20) seriesList.push({ name: 'MA20', type: 'line', data: lastMa20, xAxisIndex: 0, yAxisIndex: 0,
-    lineStyle: { width: 1, color: '#38bdf8' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
+    lineStyle: { width: 1.5, color: CHART_PALETTE.ma20, opacity: 0.95 }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
   if (ind.ma60) seriesList.push({ name: 'MA60', type: 'line', data: lastMa60, xAxisIndex: 0, yAxisIndex: 0,
-    lineStyle: { width: 1, color: '#a78bfa' }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
+    lineStyle: { width: 1.65, color: CHART_PALETTE.ma60, opacity: 0.95 }, symbol: 'none', smooth: false, connectNulls: true, z: 4 })
 
   // Main xAxis
   xAxes.push({ type: 'category', data: dates, gridIndex: 0, boundaryGap: true,
@@ -420,9 +427,9 @@ function buildOption(chartH: number = 300) {
           <div>开 <b>${fmtPrice(k.open)}</b>  收 <b style="color:${k.close >= k.open ? UP_COLOR : DOWN_COLOR}">${fmtPrice(k.close)}</b></div>
           <div>高 ${fmtPrice(k.high)}  低 ${fmtPrice(k.low)}</div>
           <div style="color:${k.close >= k.open ? UP_COLOR : DOWN_COLOR}">${pctStr}${pct.toFixed(2)}%</div>
-          ${ind.ma5 ? `<div><span style="color:#f0b429">MA5</span> ${fmtPrice(lastMa5[idx])}</div>` : ''}
-          ${ind.ma20 ? `<div><span style="color:#38bdf8">MA20</span> ${fmtPrice(lastMa20[idx])}</div>` : ''}
-          ${ind.ma60 ? `<div><span style="color:#a78bfa">MA60</span> ${fmtPrice(lastMa60[idx])}</div>` : ''}
+          ${ind.ma5 ? `<div><span style="color:${CHART_PALETTE.ma5}">MA5</span> ${fmtPrice(lastMa5[idx])}</div>` : ''}
+          ${ind.ma20 ? `<div><span style="color:${CHART_PALETTE.ma20}">MA20</span> ${fmtPrice(lastMa20[idx])}</div>` : ''}
+          ${ind.ma60 ? `<div><span style="color:${CHART_PALETTE.ma60}">MA60</span> ${fmtPrice(lastMa60[idx])}</div>` : ''}
         </div>`
       },
     }

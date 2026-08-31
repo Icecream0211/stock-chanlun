@@ -1,4 +1,5 @@
 import type { KLine } from '../api/stock'
+import { normDateTime } from './chartDateUtils'
 
 /** 主图渲染超过此根数时做 LTTB 降采样（保留 OHLC 极值） */
 export const KLINE_DISPLAY_MAX = 600
@@ -107,7 +108,11 @@ function injectOhlcExtrema(klines: KLine[], indices: number[]): number[] {
 /**
  * LTTB 降采样 K 线（用于 ECharts 主图）；缠论叠加仍用全量 props。
  */
-export function downsampleKlines(klines: KLine[], maxPoints = KLINE_DISPLAY_MAX): KLine[] {
+export function downsampleKlines(
+  klines: KLine[],
+  maxPoints = KLINE_DISPLAY_MAX,
+  anchorDates: string[] = [],
+): KLine[] {
   const n = klines.length
   if (n <= maxPoints) return klines
 
@@ -118,6 +123,17 @@ export function downsampleKlines(klines: KLine[], maxPoints = KLINE_DISPLAY_MAX)
     const subY = indices.map(i => typicalPrice(klines[i]))
     const picked = lttbIndices(subY, maxPoints)
     indices = picked.map(p => indices[p])
+  }
+
+  // 缠论端点是图形几何的硬锚点。普通 K 线可以降采样，笔、线段和中枢的
+  // 起止柱不能被删除，否则叠加层会吸附到邻近柱并产生视觉断点。
+  if (anchorDates.length) {
+    const anchors = new Set(anchorDates.map(normDateTime))
+    const selected = new Set(indices)
+    for (let i = 0; i < klines.length; i++) {
+      if (anchors.has(normDateTime(klines[i].date))) selected.add(i)
+    }
+    indices = [...selected].sort((a, b) => a - b)
   }
 
   return indices.map(i => klines[i])

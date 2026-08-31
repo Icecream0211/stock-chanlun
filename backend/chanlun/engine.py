@@ -49,7 +49,8 @@ class ChanlunEngine:
         seg_detector = SegmentDetector(bis)
         segments = seg_detector.detect_segments(min_overlap_bis=3)
 
-        # 4. 中枢识别
+        # 4. 中枢识别：笔中枢与线段中枢分别计算，不能混成同一种图形
+        bi_zhongshus = seg_detector.detect_bi_zhongshus()
         zhongshus = seg_detector.detect_zhongshus(segments)
 
         # 5. 买卖点判定
@@ -74,6 +75,7 @@ class ChanlunEngine:
             bis=bis,
             xiangs=segments,
             zhongshus=zhongshus,
+            bi_zhongshus=bi_zhongshus,
             signals=signals,
             trend=trend,
             summary=summary,

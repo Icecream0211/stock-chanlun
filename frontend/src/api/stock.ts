@@ -145,6 +145,7 @@ export interface XiangSegment {
   low: number
   start_price?: number
   end_price?: number
+  confirmed?: boolean
 }
 
 export interface Zhongshu {
@@ -153,6 +154,7 @@ export interface Zhongshu {
   end: string
   range_high: number
   range_low: number
+  confirmed?: boolean
 }
 
 export interface Signal {

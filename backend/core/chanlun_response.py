@@ -55,6 +55,7 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
                 "low": s.low,
                 "start_price": s.start_price,
                 "end_price": s.end_price,
+                "confirmed": s.confirmed,
             }
             for s in result.xiangs
         ],
@@ -65,8 +66,22 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
                 "end": str(z.end)[:19],
                 "range_high": z.range_high,
                 "range_low": z.range_low,
+                "confirmed": z.confirmed,
+                "source_type": z.source_type,
             }
             for z in result.zhongshus
+        ],
+        "bi_zhongshus": [
+            {
+                "id": z.id,
+                "start": str(z.start)[:19],
+                "end": str(z.end)[:19],
+                "range_high": z.range_high,
+                "range_low": z.range_low,
+                "confirmed": z.confirmed,
+                "source_type": z.source_type,
+            }
+            for z in result.bi_zhongshus
         ],
         "signals": [
             {

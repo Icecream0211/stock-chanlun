@@ -19,7 +19,7 @@
                 :checked="indicators.ma5"
                 @change="store.toggleIndicator('ma5')"
               />
-              <span class="indicator-dot" style="background: #f0b429"></span>
+              <span class="indicator-dot" style="background: #FFD166"></span>
               <span>MA5</span>
             </label>
             <label class="indicator-item">
@@ -28,7 +28,7 @@
                 :checked="indicators.ma20"
                 @change="store.toggleIndicator('ma20')"
               />
-              <span class="indicator-dot" style="background: #58a6ff"></span>
+              <span class="indicator-dot" style="background: #22D3EE"></span>
               <span>MA20</span>
             </label>
             <label class="indicator-item">
@@ -37,7 +37,7 @@
                 :checked="indicators.ma60"
                 @change="store.toggleIndicator('ma60')"
               />
-              <span class="indicator-dot" style="background: #bc8cff"></span>
+              <span class="indicator-dot" style="background: #A78BFA"></span>
               <span>MA60</span>
             </label>
           </div>
@@ -52,7 +52,7 @@
                 :checked="indicators.bis"
                 @change="store.toggleIndicator('bis')"
               />
-              <span class="indicator-dot" style="background: linear-gradient(90deg, #f85149, #3fb950)"></span>
+              <span class="indicator-dot" style="background: #2F9BFF"></span>
               <span>笔</span>
             </label>
             <label class="indicator-item">
@@ -61,7 +61,7 @@
                 :checked="indicators.xiangs"
                 @change="store.toggleIndicator('xiangs')"
               />
-              <span class="indicator-dot" style="background: linear-gradient(90deg, #ffe066, #ff9f7f)"></span>
+              <span class="indicator-dot" style="background: #FF8C42"></span>
               <span>线段</span>
             </label>
             <label class="indicator-item">
@@ -70,7 +70,7 @@
                 :checked="indicators.zhongshus"
                 @change="store.toggleIndicator('zhongshus')"
               />
-              <span class="indicator-dot" style="background: #bc8cff; opacity: 0.7"></span>
+              <span class="indicator-dot" style="background: #FF4D6D; opacity: 0.85"></span>
               <span>中枢</span>
             </label>
             <label class="indicator-item">

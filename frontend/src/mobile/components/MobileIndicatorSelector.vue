@@ -95,15 +95,15 @@ const isOpen = ref(false)
 const cfg = computed(() => store.indicators)
 
 const mainInds = [
-  { key: 'ma5' as const, label: 'MA5', dotColor: '#f0b429', dotStyle: { background: '#f0b429' } },
-  { key: 'ma20' as const, label: 'MA20', dotColor: '#58a6ff', dotStyle: { background: '#58a6ff' } },
-  { key: 'ma60' as const, label: 'MA60', dotColor: '#bc8cff', dotStyle: { background: '#bc8cff' } },
+  { key: 'ma5' as const, label: 'MA5', dotColor: '#FFD166', dotStyle: { background: '#FFD166' } },
+  { key: 'ma20' as const, label: 'MA20', dotColor: '#22D3EE', dotStyle: { background: '#22D3EE' } },
+  { key: 'ma60' as const, label: 'MA60', dotColor: '#A78BFA', dotStyle: { background: '#A78BFA' } },
 ]
 
 const chanlunInds = [
-  { key: 'bis' as const, label: '笔', dotStyle: { background: 'linear-gradient(90deg, #f85149, #3fb950)' } },
-  { key: 'xiangs' as const, label: '线段', dotStyle: { background: 'linear-gradient(90deg, #ffe066, #ff9f7f)' } },
-  { key: 'zhongshus' as const, label: '中枢', dotStyle: { background: '#bc8cff' } },
+  { key: 'bis' as const, label: '笔', dotStyle: { background: '#2F9BFF' } },
+  { key: 'xiangs' as const, label: '线段', dotStyle: { background: '#FF8C42' } },
+  { key: 'zhongshus' as const, label: '中枢', dotStyle: { background: '#FF4D6D' } },
   { key: 'signals' as const, label: '买卖点', dotStyle: { background: '#3fb950' } },
   { key: 'aiLines' as const, label: 'AI信号线', dotStyle: { background: '#d29922' } },
   { key: 'supportResistance' as const, label: '支撑阻力', dotStyle: { background: 'linear-gradient(90deg, #3fb950, #f85149)' } },

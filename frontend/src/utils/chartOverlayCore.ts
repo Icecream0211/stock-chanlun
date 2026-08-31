@@ -4,6 +4,7 @@
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '../api/stock'
 import { buildDateLookup, dateToIdxRobust, resolveBarRange } from './chartDateUtils'
 import { simplifySupportResistanceLevels } from './chartOverlayUtils'
+import { CHART_PALETTE } from './chartPalette'
 
 export type GraphicElement = Record<string, unknown>
 
@@ -33,6 +34,10 @@ export type ChanlunOverlayFlags = {
 export type ChanlunOverlayTheme = {
   upColor: string
   downColor: string
+  biColor: string
+  segmentColor: string
+  zhongshuStroke: string
+  zhongshuFill: string
   strokeBg: string
   labelFont: string
   signalRadius: number
@@ -46,8 +51,12 @@ export type ChanlunOverlayTheme = {
 }
 
 export const CHANLUN_OVERLAY_THEME_PC: ChanlunOverlayTheme = {
-  upColor: '#f85149',
-  downColor: '#3fb950',
+  upColor: CHART_PALETTE.klineUp,
+  downColor: CHART_PALETTE.klineDown,
+  biColor: CHART_PALETTE.bi,
+  segmentColor: CHART_PALETTE.segment,
+  zhongshuStroke: CHART_PALETTE.zhongshuStroke,
+  zhongshuFill: CHART_PALETTE.zhongshuFill,
   strokeBg: '#0d1117',
   labelFont: 'Noto Sans SC',
   signalRadius: 8,
@@ -61,8 +70,12 @@ export const CHANLUN_OVERLAY_THEME_PC: ChanlunOverlayTheme = {
 }
 
 export const CHANLUN_OVERLAY_THEME_MOBILE: ChanlunOverlayTheme = {
-  upColor: '#ef4444',
-  downColor: '#22c55e',
+  upColor: CHART_PALETTE.klineUp,
+  downColor: CHART_PALETTE.klineDown,
+  biColor: CHART_PALETTE.bi,
+  segmentColor: CHART_PALETTE.segment,
+  zhongshuStroke: CHART_PALETTE.zhongshuStroke,
+  zhongshuFill: CHART_PALETTE.zhongshuFill,
   strokeBg: '#06080c',
   labelFont: 'monospace',
   signalRadius: 7,
@@ -185,87 +198,85 @@ export function buildChanlunGraphicChildren(ctx: {
     const yPx2 = Math.max(a[1], b[1])
     children.push({
       type: 'rect',
-      x: xPx1, y: yPx1,
-      width: Math.max(xPx2 - xPx1, 4),
-      height: Math.max(yPx2 - yPx1, 1),
-      style: {
-        fill: 'rgba(188, 140, 255, 0.06)',
-        stroke: 'rgba(188, 140, 255, 0.42)',
-        lineWidth: 1,
-        lineDash: [5, 4],
+      shape: {
+        x: xPx1,
+        y: yPx1,
+        width: Math.max(xPx2 - xPx1, 4),
+        height: Math.max(yPx2 - yPx1, 1),
       },
-      z: 100,
+      style: {
+        fill: theme.zhongshuFill,
+        stroke: theme.zhongshuStroke,
+        lineWidth: 1.25,
+        lineDash: zs.confirmed === false ? [6, 4] : undefined,
+      },
+      z: 96,
       silent: true,
     })
     children.push({
       type: 'text',
       style: {
         text: zs.range_high.toFixed(2),
-        fill: 'rgba(188, 140, 255, 0.85)',
+        fill: theme.zhongshuStroke,
         fontSize: theme.zsLabelFontSize,
         fontFamily: theme.labelFont,
       },
       x: xPx1 + 3, y: yPx1 + 12,
-      z: 101, silent: true,
+      z: 97, silent: true,
     })
     children.push({
       type: 'text',
       style: {
         text: zs.range_low.toFixed(2),
-        fill: 'rgba(188, 140, 255, 0.85)',
+        fill: theme.zhongshuStroke,
         fontSize: theme.zsLabelFontSize,
         fontFamily: theme.labelFont,
       },
       x: xPx1 + 3, y: yPx2 - 2,
-      z: 101, silent: true,
+      z: 97, silent: true,
     })
   }
 
-  for (const bi of bis) {
-    if (bi._e < viewS || bi._s > viewE || bi._e < bi._s) continue
-    const p1 = pixelAtIdxCached(bi._s, bi.start_price ?? (bi.direction === 'up' ? bi.low : bi.high))
-    const p2 = pixelAtIdxCached(bi._e, bi.end_price ?? (bi.direction === 'up' ? bi.high : bi.low))
-    if (!p1 || !p2) continue
-    const color = bi.direction === 'up' ? theme.upColor : theme.downColor
-    children.push({
-      type: 'line',
-      shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 1.25, opacity: 0.52 },
-      z: 102, silent: true,
-    })
-    children.push({
-      type: 'circle',
-      shape: { cx: p1[0], cy: p1[1], r: 2 },
-      style: { fill: color, stroke: theme.strokeBg, lineWidth: 0.8 },
-      z: 103, silent: true,
-    })
-    children.push({
-      type: 'circle',
-      shape: { cx: p2[0], cy: p2[1], r: 2 },
-      style: { fill: color, stroke: theme.strokeBg, lineWidth: 1 },
-      z: 103, silent: true,
-    })
+  const appendStructurePolylines = <T extends IndexedRange<Bi | XiangSegment>>(
+    items: T[],
+    color: string,
+    lineWidth: number,
+    z: number,
+  ) => {
+    let points: [number, number][] = []
+    let previousEnd = -1
+    const flush = () => {
+      if (points.length >= 2) {
+        children.push({
+          type: 'polyline',
+          shape: { points },
+          style: { stroke: color, fill: null, lineWidth, opacity: 0.96, lineJoin: 'round', lineCap: 'round' },
+          z, silent: true,
+        })
+      }
+      points = []
+    }
+
+    for (const item of items) {
+      if (item._e < viewS || item._s > viewE || item._e < item._s) continue
+      const startPrice = item.start_price ?? (item.direction === 'up' ? item.low : item.high)
+      const endPrice = item.end_price ?? (item.direction === 'up' ? item.high : item.low)
+      const p1 = pixelAtIdxCached(item._s, startPrice)
+      const p2 = pixelAtIdxCached(item._e, endPrice)
+      if (!p1 || !p2) continue
+      if (points.length && previousEnd === item._s) points.push(p2)
+      else {
+        flush()
+        points = [p1, p2]
+      }
+      previousEnd = item._e
+    }
+    flush()
   }
 
-  for (const xiang of xiangs) {
-    if (xiang._e < viewS || xiang._s > viewE || xiang._e < xiang._s) continue
-    const p1 = pixelAtIdxCached(
-      xiang._s,
-      xiang.start_price ?? (xiang.direction === 'up' ? xiang.low : xiang.high),
-    )
-    const p2 = pixelAtIdxCached(
-      xiang._e,
-      xiang.end_price ?? (xiang.direction === 'up' ? xiang.high : xiang.low),
-    )
-    if (!p1 || !p2) continue
-    const color = xiang.direction === 'up' ? '#ffe066' : '#ff9f7f'
-    children.push({
-      type: 'line',
-      shape: { x1: p1[0], y1: p1[1], x2: p2[0], y2: p2[1] },
-      style: { stroke: color, lineWidth: 2, opacity: 0.38 },
-      z: 101, silent: true,
-    })
-  }
+  // 笔统一使用电光蓝连续折线；线段使用更粗的橙色，避免和涨跌 K 线混淆。
+  appendStructurePolylines(bis, theme.biColor, 1.7, 102)
+  appendStructurePolylines(xiangs, theme.segmentColor, 2.8, 103)
 
   for (const sig of signals) {
     if (sig._idx < viewS || sig._idx > viewE) continue

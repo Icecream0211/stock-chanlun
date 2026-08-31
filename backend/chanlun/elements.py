@@ -38,6 +38,7 @@ class XiangSegment(BaseModel):
     end_price: float = 0.0
     bi_ids: list[str]  # 组成该线段的笔ID列表
     level: int = 2     # 1=笔级, 2=段级, 3=更大级别
+    confirmed: bool = True  # 尾部尚未出现反向确认时为 False
 
 
 class Zhongshu(BaseModel):
@@ -49,6 +50,8 @@ class Zhongshu(BaseModel):
     range_low: float   # 中枢区间最低价
     xiang_ids: list[str]  # 构成该中枢的线段ID
     level: int
+    confirmed: bool = True
+    source_type: Literal["bi", "segment"] = "segment"
 
 
 class MACDData(BaseModel):
@@ -98,6 +101,7 @@ class ChanlunAnalysis(BaseModel):
     bis: list[Bi]
     xiangs: list[XiangSegment]
     zhongshus: list[Zhongshu]
+    bi_zhongshus: list[Zhongshu] = Field(default_factory=list)
     signals: list[BuySellPoint]
     trend: Literal["上涨", "下跌", "盘整", "未知"]
     summary: str  # 自然语言总结

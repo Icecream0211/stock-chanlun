@@ -27,6 +27,16 @@ describe('chartDownsample', () => {
     expect(out.at(-1)).toEqual(klines.at(-1))
   })
 
+  it('retains structural endpoint anchors while downsampling', () => {
+    const klines = makeKlines(1200).map((k, i) => ({
+      ...k,
+      date: `2024-01-01 09:${String(Math.floor(i / 60) % 60).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}`,
+    }))
+    const anchor = klines[350].date
+    const out = downsampleKlines(klines, 100, [anchor])
+    expect(out.some(k => k.date === anchor)).toBe(true)
+  })
+
   it('klineSeriesSignature changes when last bar updates', () => {
     const klines = makeKlines(3)
     const sig1 = klineSeriesSignature(klines)

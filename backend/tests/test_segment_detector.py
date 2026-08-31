@@ -39,39 +39,54 @@ class SegmentDetectorTests(unittest.TestCase):
             direction=direction,
             high=high,
             low=low,
+            start_price=low if direction == "up" else high,
+            end_price=high if direction == "up" else low,
             bi_ids=[f"bi_{idx}a", f"bi_{idx}b", f"bi_{idx}c"],
             level=2,
         )
 
     def test_detect_segments_returns_empty_when_bis_less_than_three(self):
         detector = SegmentDetector(
-            bis=[self._bi(1, "up", 0, 5, 11.0, 9.0), self._bi(2, "up", 6, 10, 12.0, 10.0)]
+            bis=[self._bi(1, "up", 0, 5, 11.0, 9.0), self._bi(2, "down", 5, 10, 11.0, 10.0)]
         )
         self.assertEqual(detector.detect_segments(), [])
 
-    def test_detect_segments_builds_segment_from_overlapping_same_direction_bis(self):
-        bis = [
-            self._bi(1, "up", 0, 5, 11.0, 9.2),
-            self._bi(2, "up", 6, 10, 11.8, 9.5),
-            self._bi(3, "up", 11, 15, 12.3, 9.8),
-            # 第4笔同向且重叠，应该延伸进同一个线段
-            self._bi(4, "up", 16, 20, 12.8, 10.0),
-            # 反向笔，不参与上面线段延伸
-            self._bi(5, "down", 21, 25, 12.5, 9.4),
-        ]
+    def _bis_from_points(self, points: list[float]) -> list[Bi]:
+        bis = []
+        for i, (start_price, end_price) in enumerate(zip(points, points[1:])):
+            direction = "up" if end_price > start_price else "down"
+            bis.append(self._bi(
+                i + 1,
+                direction,
+                i * 5,
+                (i + 1) * 5,
+                max(start_price, end_price),
+                min(start_price, end_price),
+            ))
+        return bis
+
+    def test_detect_segments_uses_alternating_bis_and_shares_boundary(self):
+        # 第3根向上笔终点 13 高于前后向上笔终点 11/12，确认上线段结束；
+        # 剩余3笔形成一条尚未确认的下线段。
+        bis = self._bis_from_points([9.0, 11.0, 10.0, 13.0, 9.0, 12.0, 8.0])
         detector = SegmentDetector(bis=bis)
 
         segments = detector.detect_segments()
-        self.assertEqual(len(segments), 1)
-        seg = segments[0]
-        self.assertEqual(seg.direction, "up")
-        self.assertEqual(seg.bi_ids, ["bi_1", "bi_2", "bi_3", "bi_4"])
-        self.assertEqual(seg.start, bis[0].start)
-        self.assertEqual(seg.end, bis[3].end)
-        self.assertAlmostEqual(seg.high, 12.8)
-        self.assertAlmostEqual(seg.low, 9.2)
-        self.assertAlmostEqual(seg.start_price, bis[0].start_price)
-        self.assertAlmostEqual(seg.end_price, bis[3].end_price)
+        self.assertEqual(len(segments), 2)
+        first, second = segments
+        self.assertEqual(first.direction, "up")
+        self.assertEqual(first.bi_ids, ["bi_1", "bi_2", "bi_3"])
+        self.assertTrue(first.confirmed)
+        self.assertEqual(second.direction, "down")
+        self.assertEqual(second.bi_ids, ["bi_4", "bi_5", "bi_6"])
+        self.assertFalse(second.confirmed)
+        self.assertEqual(first.end, second.start)
+        self.assertAlmostEqual(first.end_price, second.start_price)
+
+    def test_detect_segments_rejects_disconnected_bis(self):
+        bis = self._bis_from_points([9.0, 11.0, 10.0, 13.0])
+        bis[1] = bis[1].model_copy(update={"start": bis[1].start + timedelta(minutes=1)})
+        self.assertEqual(SegmentDetector(bis).detect_segments(), [])
 
     def test_detect_zhongshus_creates_one_from_three_overlapping_segments(self):
         segments = [
@@ -90,6 +105,20 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertAlmostEqual(zs.range_high, 108.0)
         self.assertAlmostEqual(zs.range_low, 103.0)
         self.assertEqual(zs.xiang_ids, ["xiang_1", "xiang_2", "xiang_3"])
+        self.assertEqual(zs.source_type, "segment")
+
+    def test_detect_bi_zhongshus_is_independent_from_segment_zhongshus(self):
+        bis = self._bis_from_points([9.0, 13.0, 10.0, 12.0])
+        detector = SegmentDetector(bis)
+
+        zhongshus = detector.detect_bi_zhongshus()
+
+        self.assertEqual(len(zhongshus), 1)
+        self.assertEqual(zhongshus[0].id, "bi_zs_1")
+        self.assertEqual(zhongshus[0].source_type, "bi")
+        self.assertEqual(zhongshus[0].level, 1)
+        self.assertAlmostEqual(zhongshus[0].range_high, 12.0)
+        self.assertAlmostEqual(zhongshus[0].range_low, 10.0)
 
     def test_detect_zhongshus_extension_keeps_overlap_not_union(self):
         # 中枢延伸时区间应取所有段的交叠（收窄），而非并集扩张

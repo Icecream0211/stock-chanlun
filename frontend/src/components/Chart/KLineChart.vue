@@ -41,6 +41,8 @@ import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResist
 import type { IndicatorConfig } from '../../stores/chanlun'
 import { calcMA, computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
 import { downsampleKlines, klineSeriesSignature } from '../../utils/chartDownsample'
+import { formatAxisDateLabel, normDateTime } from '../../utils/chartDateUtils'
+import { CHART_PALETTE } from '../../utils/chartPalette'
 import { setChartOptionKeepDataZoom } from '../../utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '../../composables/useDebounce'
 import { useKlineIndicators } from '../../composables/useKlineIndicators'
@@ -68,8 +70,13 @@ const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
 
-/** 主图渲染用降采样序列；缠论叠加仍基于全量 props */
-const displayKlines = computed(() => downsampleKlines(props.klines))
+/** 主图渲染用降采样序列；所有结构端点作为硬锚点，避免降采样导致吸附错位。 */
+const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
+  ...props.bis.flatMap(item => [item.start, item.end]),
+  ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
+  ...props.zhongshus.flatMap(item => [item.start, item.end]),
+  ...props.signals.map(item => item.datetime),
+]))
 const klineIndicators = useKlineIndicators(displayKlines)
 
 /** 获取指标配置，如果未提供则默认全部显示 */
@@ -88,8 +95,8 @@ type DataZoomOption = { startValue?: number; endValue?: number; start?: number; 
 
 let chanlunOverlayCache: ChanlunOverlayPayload | null = null
 
-const COLOR_UP = '#f85149'
-const COLOR_DOWN = '#3fb950'
+const COLOR_UP = CHART_PALETTE.klineUp
+const COLOR_DOWN = CHART_PALETTE.klineDown
 const MAIN_TOP = 36
 const MAIN_HEIGHT = 420
 const SUB_PANEL_HEIGHT = { volume: 120, macd: 120, rsi: 100, skdj: 100 } as const
@@ -135,7 +142,7 @@ function formatBarLine(idx: number): string {
   const series = displayKlines.value
   if (idx < 0 || idx >= series.length) return ''
   const k = series[idx]
-  const d = lastDates[idx] ?? k.date.slice(0, 10)
+  const d = lastDates[idx] ?? normDateTime(k.date)
   return `${d}  开盘 ${fmtPrice(k.open)}  收盘 ${fmtPrice(k.close)}  最高 ${fmtPrice(k.high)}  最低 ${fmtPrice(k.low)}  |  MA5 ${fmtPrice(lastMa5[idx])}  MA20 ${fmtPrice(lastMa20[idx])}  MA60 ${fmtPrice(lastMa60[idx])}`
 }
 
@@ -148,7 +155,7 @@ function setBarInfoByIndex(idx: number) {
 
 function buildOption() {
   const seriesKlines = displayKlines.value
-  const dates = seriesKlines.map(k => k.date.slice(0, 10))
+  const dates = seriesKlines.map(k => normDateTime(k.date))
   const ohlc = seriesKlines.map(k => [k.open, k.close, k.low, k.high])
   const closes = seriesKlines.map(k => k.close)
   const ind = getIndicators()
@@ -163,7 +170,7 @@ function buildOption() {
 
   const lineSeriesOpts = {
     type: 'line' as const, xAxisIndex: 0, yAxisIndex: 0,
-    smooth: true, showSymbol: false, connectNulls: false, z: 4
+    smooth: false, showSymbol: false, connectNulls: false, z: 4
   }
 
   const legendData = ['K线']
@@ -172,14 +179,15 @@ function buildOption() {
       name: 'K线', type: 'candlestick', data: ohlc,
       xAxisIndex: 0, yAxisIndex: 0, z: 3,
       itemStyle: {
-        color: '#f85149', color0: '#3fb950',
-        borderColor: '#f85149', borderColor0: '#3fb950'
+        color: COLOR_UP, color0: COLOR_DOWN,
+        borderColor: COLOR_UP, borderColor0: COLOR_DOWN,
+        borderWidth: 1,
       }
     }
   ]
-  if (ind.ma5) { legendData.push('MA5'); seriesList.push({ name: 'MA5', ...lineSeriesOpts, data: ma5, lineStyle: { width: 1, color: '#f0b429' }, emphasis: { disabled: true } }) }
-  if (ind.ma20) { legendData.push('MA20'); seriesList.push({ name: 'MA20', ...lineSeriesOpts, data: ma20, lineStyle: { width: 1, color: '#58a6ff' }, emphasis: { disabled: true } }) }
-  if (ind.ma60) { legendData.push('MA60'); seriesList.push({ name: 'MA60', ...lineSeriesOpts, data: ma60, lineStyle: { width: 1, color: '#bc8cff' }, emphasis: { disabled: true } }) }
+  if (ind.ma5) { legendData.push('MA5'); seriesList.push({ name: 'MA5', ...lineSeriesOpts, data: ma5, lineStyle: { width: 1.35, color: CHART_PALETTE.ma5, opacity: 0.95 }, emphasis: { disabled: true } }) }
+  if (ind.ma20) { legendData.push('MA20'); seriesList.push({ name: 'MA20', ...lineSeriesOpts, data: ma20, lineStyle: { width: 1.5, color: CHART_PALETTE.ma20, opacity: 0.95 }, emphasis: { disabled: true } }) }
+  if (ind.ma60) { legendData.push('MA60'); seriesList.push({ name: 'MA60', ...lineSeriesOpts, data: ma60, lineStyle: { width: 1.65, color: CHART_PALETTE.ma60, opacity: 0.95 }, emphasis: { disabled: true } }) }
 
   const subs = activeSubPanels(ind, seriesKlines.length)
   const grids: Record<string, unknown>[] = []
@@ -199,7 +207,7 @@ function buildOption() {
     boundaryGap: true,
     axisLine: { lineStyle: { color: '#30363d' } },
     axisTick: { show: false },
-    axisLabel: { color: '#7d8590', fontSize: 10, interval: 'auto' as const, show: subs.length === 0 },
+    axisLabel: { color: '#7d8590', fontSize: 10, interval: 'auto' as const, show: subs.length === 0, formatter: formatAxisDateLabel },
     splitLine: { show: false },
   })
   yAxes.push({
@@ -412,9 +420,9 @@ function buildOption() {
         const idx = first.dataIndex
         if (idx == null || idx < 0 || idx >= seriesKlines.length) return ''
         const k = seriesKlines[idx]
-        const d = k.date.slice(0, 10)
+        const d = normDateTime(k.date)
         const change = k.close >= k.open
-        const changeColor = change ? '#3fb950' : '#f85149'
+        const changeColor = change ? COLOR_UP : COLOR_DOWN
         const changePct = k.open > 0 ? ((k.close - k.open) / k.open * 100) : 0
 
         let html = `<div style="font-weight:600;margin-bottom:8px;border-bottom:1px solid #30363d;padding-bottom:6px">${d}</div>`
@@ -436,9 +444,9 @@ function buildOption() {
         // 均线
         html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid #30363d">`
         html += `<div style="margin-bottom:4px;color:#7d8590">均线</div>`
-        html += `<span style="color:#f0b429">●</span> MA5 ${fmtPrice(ma5[idx])}　`
-        html += `<span style="color:#58a6ff">●</span> MA20 ${fmtPrice(ma20[idx])}　`
-        html += `<span style="color:#bc8cff">●</span> MA60 ${fmtPrice(ma60[idx])}`
+        html += `<span style="color:${CHART_PALETTE.ma5}">●</span> MA5 ${fmtPrice(ma5[idx])}　`
+        html += `<span style="color:${CHART_PALETTE.ma20}">●</span> MA20 ${fmtPrice(ma20[idx])}　`
+        html += `<span style="color:${CHART_PALETTE.ma60}">●</span> MA60 ${fmtPrice(ma60[idx])}`
         html += `</div>`
 
         return html
@@ -575,7 +583,7 @@ function updateOverlayOnly() {
 /** 仅刷新缠论叠加缓存与 graphic，不重建 K 线/均线 series */
 function syncChanlunOverlayCache() {
   const seriesKlines = displayKlines.value
-  const dates = seriesKlines.map(k => k.date.slice(0, 10))
+  const dates = seriesKlines.map(k => normDateTime(k.date))
   const ind = getIndicators()
   const indData = klineIndicators.value
 
