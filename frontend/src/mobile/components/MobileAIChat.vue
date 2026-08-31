@@ -73,9 +73,12 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useChanlunStore } from '@/stores/chanlun'
 import { useAiDiagnosisChat } from '@/composables/useAiDiagnosisChat'
 
 const props = defineProps<{ stockCode: string }>()
+
+const chanlunStore = useChanlunStore()
 
 const {
   messages,
@@ -88,7 +91,10 @@ const {
   stopGeneration,
   fillQuestion,
   autoResize,
-} = useAiDiagnosisChat(props.stockCode, 'm_session', { showErrorToast: false })
+} = useAiDiagnosisChat(props.stockCode, 'm_session', {
+  showErrorToast: false,
+  model: chanlunStore.aiModel,
+})
 
 const hasStreamingReply = computed(() =>
   messages.value.some(m => m.role === 'assistant' && m.streaming && m.displayText.length > 0),

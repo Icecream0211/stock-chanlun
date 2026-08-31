@@ -24,6 +24,12 @@
               @click="switchModel('gemini')"
               title="Gemini"
             >GM</button>
+            <button
+              class="model-btn"
+              :class="{ active: store.aiModel === 'custom' }"
+              @click="switchModel('custom')"
+              title="自定义网关（CUSTOM_LLM_BASE_URL）"
+            >CU</button>
           </div>
           <button class="btn btn-ghost" @click="refreshData" :disabled="loadingAny">
             {{ loadingAny ? '加载中...' : '刷新' }}

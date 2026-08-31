@@ -531,6 +531,7 @@ stock-chanlun/
 |------|------|
 | DeepSeek V4 Pro（`deepseek-v4-pro`，默认） | 自然语言缠论分析、AI 诊股对话 |
 | Gemini API | 自然语言缠论分析（可在个股页切换） |
+| 自定义网关（`custom`，可选） | 经 one-api/new-api 等 OpenAI 兼容网关转发任意模型（如 `deepseek-v4-flash#claude`），需在 `.env` 配置 `CUSTOM_LLM_BASE_URL` |
 
 ---
 
@@ -605,6 +606,11 @@ DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxx
 
 # Gemini API（可选，二选一）
 GEMINI_API_KEY=AIzaSyxxxxxxxxxxxxxxxxxxxx
+
+# 自定义 OpenAI 兼容网关（可选，one-api/new-api 等；模型名可含特殊字符）
+# CUSTOM_LLM_BASE_URL=https://your-gateway.example.com/v1
+# CUSTOM_LLM_API_KEY=sk-your-gateway-key
+# CUSTOM_LLM_MODEL_ID=deepseek-v4-flash#claude
 
 # 生产建议：逗号分隔的前端源，默认 *（此时浏览器跨域凭证关闭）
 # CORS_ORIGINS=http://localhost:5173,https://yourname.github.io
@@ -816,6 +822,9 @@ GET  /health                                 健康检查
 | `DEEPSEEK_API_KEY` | 否 | DeepSeek API Key |
 | `DEEPSEEK_MODEL_ID` | 否 | DeepSeek 模型 ID，默认 `deepseek-v4-pro` |
 | `GEMINI_API_KEY` | 否 | Gemini API Key |
+| `CUSTOM_LLM_BASE_URL` | 否 | 自定义 OpenAI 兼容网关地址（如 `https://your-gateway.example.com/v1`）；设置后启用 `custom` 模型 |
+| `CUSTOM_LLM_API_KEY` | 否 | 自定义网关 API Key（`custom` 模型必填） |
+| `CUSTOM_LLM_MODEL_ID` | 否 | 自定义网关模型 ID（可含特殊字符如 `deepseek-v4-flash#claude`），默认回退 `DEEPSEEK_MODEL_ID` |
 | `CORS_ORIGINS` | 否 | 逗号分隔的允许来源；默认 `*`（与 `allow_credentials` 组合符合浏览器规则） |
 | `FINANCE_TLS_RELAXED` | 否 | 设为 `1`/`true` 时对部分金融站点请求放宽 TLS 校验（默认关闭，优先安全） |
 | `PORT` | 否 | 后端监听端口，默认 `8010`（`run_server.py` 与 `python main.py` 均读取） |

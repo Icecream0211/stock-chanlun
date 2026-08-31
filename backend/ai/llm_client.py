@@ -57,6 +57,40 @@ class LLMClient:
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
 
+    # ── 自定义 OpenAI 兼容网关（one-api / new-api 等）──────────────────────────
+
+    def _custom(self, messages: list[dict], **kwargs) -> str:
+        base_url = os.environ.get("CUSTOM_LLM_BASE_URL", "").strip().rstrip("/")
+        api_key = os.environ.get("CUSTOM_LLM_API_KEY", "").strip()
+        model_id = (
+            os.environ.get("CUSTOM_LLM_MODEL_ID", "").strip()
+            or DEEPSEEK_MODEL_ID
+        )
+        if not base_url:
+            raise ValueError(
+                "CUSTOM_LLM_BASE_URL 未设置，请在 .env 中配置自定义网关地址"
+            )
+        if not api_key:
+            raise ValueError("CUSTOM_LLM_API_KEY 未设置，请在 .env 中配置")
+
+        body = {
+            "model": kwargs.get("model", model_id),
+            "messages": messages,
+            "temperature": kwargs.get("temperature", 0.3),
+            "max_tokens": kwargs.get("max_tokens", 1024),
+        }
+        client = _get_llm_http_client()
+        resp = client.post(
+            f"{base_url}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()["choices"][0]["message"]["content"].strip()
+
     # ── Gemini ─────────────────────────────────────────────────────────────────
 
     def _gemini(self, messages: list[dict], **kwargs) -> str:
@@ -117,6 +151,8 @@ class LLMClient:
                 return self._deepseek(messages, **kwargs)
             elif self.model.startswith("gemini"):
                 return self._gemini(messages, **kwargs)
+            elif self.model.startswith("custom"):
+                return self._custom(messages, **kwargs)
             else:
                 raise ValueError(f"不支持的模型: {self.model}")
         except httpx.HTTPStatusError as e:

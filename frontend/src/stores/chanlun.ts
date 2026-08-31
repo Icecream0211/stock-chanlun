@@ -78,6 +78,11 @@ export const useChanlunStore = defineStore('chanlun', () => {
   const errorAI = ref<string | null>(null)
   const currentLevel = ref<LevelOption>('daily')
   const aiModel = ref<string>('deepseek')
+  const aiModelOptions = ['deepseek', 'gemini', 'custom'] as const
+  type AiModelOption = (typeof aiModelOptions)[number]
+
+  const isSupportedModel = (m: string): m is AiModelOption =>
+    (aiModelOptions as readonly string[]).includes(m)
   const indicators = ref<IndicatorConfig>(loadIndicators())
   const klineUpdatedAt = ref<string | null>(null)
   const chanlunUpdatedAt = ref<string | null>(null)
@@ -100,7 +105,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     try {
       const res = await stockApi.getSettings()
       const m = res.data?.ai_model
-      if (m === 'deepseek' || m === 'gemini') aiModel.value = m
+      if (isSupportedModel(m)) aiModel.value = m
     } catch { /* ignore */ }
   }
 
@@ -344,7 +349,7 @@ export const useChanlunStore = defineStore('chanlun', () => {
     klines, chanlunResult, aiSignal,
     loadingKline, loadingChanlun, loadingAI, loadingChart,
     errorKline, errorChanlun, errorAI,
-    currentLevel, aiModel, indicators,
+    currentLevel, aiModel, aiModelOptions, indicators,
     klineUpdatedAt, chanlunUpdatedAt, aiUpdatedAt,
     fetchKline, fetchChanlun, fetchAISignal, loadAll, setAiModel,
     toggleIndicator, setIndicator,

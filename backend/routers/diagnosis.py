@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from ai.chat_sessions import get_or_create_session
-from config import DEEPSEEK_MODEL_ID
+from config import CUSTOM_LLM_API_KEY, DEEPSEEK_MODEL_ID
 from core.chanlun_analysis import run_analysis
 from core.datetime_fmt import format_date_short
 from deps import check_ai_diagnosis_rate_limits, client_ip
@@ -42,7 +42,15 @@ class DiagnosisBody(BaseModel):
 
 
 def _normalize_model(model: str) -> str:
-    return model if model in ("deepseek", "gemini") else "deepseek"
+    """deepseek / gemini / custom（custom 仅当配置了网关地址时可用）"""
+    m = (model or "").strip().lower()
+    if m in ("deepseek", "gemini"):
+        return m
+    if m == "custom":
+        from config import CUSTOM_LLM_BASE_URL
+
+        return m if CUSTOM_LLM_BASE_URL else "deepseek"
+    return "deepseek"
 
 
 async def _diagnosis_event_stream(
@@ -137,15 +145,29 @@ async def _diagnosis_event_stream(
 
         full_text = ""
         try:
-            if model.startswith("deepseek"):
-                key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+            if model in ("deepseek", "custom"):
+                from config import CUSTOM_LLM_BASE_URL, CUSTOM_LLM_MODEL_ID
+
+                if model == "deepseek":
+                    key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+                    base_url = "https://api.deepseek.com"
+                    model_id = DEEPSEEK_MODEL_ID
+                else:
+                    key = CUSTOM_LLM_API_KEY
+                    base_url = CUSTOM_LLM_BASE_URL
+                    model_id = CUSTOM_LLM_MODEL_ID
+
                 if not key:
-                    yield f"data: {json.dumps({'error': 'DEEPSEEK_API_KEY 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
+                    which = "CUSTOM_LLM_API_KEY" if model == "custom" else "DEEPSEEK_API_KEY"
+                    yield f"data: {json.dumps({'error': f'{which} 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
+                    return
+                if not base_url:
+                    yield f"data: {json.dumps({'error': 'CUSTOM_LLM_BASE_URL 未设置，请在 .env 中配置'}, ensure_ascii=False)}\n\n"
                     return
 
-                log.info("AI诊断 DeepSeek 流式开始 session=%s", session_id)
+                log.info("AI诊断 %s 流式开始 session=%s", model, session_id)
                 body = {
-                    "model": DEEPSEEK_MODEL_ID,
+                    "model": model_id,
                     "messages": messages,
                     "temperature": 0.4,
                     "stream": True,
@@ -153,7 +175,7 @@ async def _diagnosis_event_stream(
                 client = _get_diagnosis_async_client()
                 async with client.stream(
                         "POST",
-                        "https://api.deepseek.com/v1/chat/completions",
+                        f"{base_url}/chat/completions",
                         headers={
                             "Authorization": f"Bearer {key}",
                             "Content-Type": "application/json",
@@ -180,7 +202,8 @@ async def _diagnosis_event_stream(
                             except json.JSONDecodeError:
                                 continue
                 log.info(
-                    "AI诊断 DeepSeek 完成 session=%s chars=%s",
+                    "AI诊断 %s 完成 session=%s chars=%s",
+                    model,
                     session_id,
                     len(full_text),
                 )

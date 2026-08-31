@@ -23,6 +23,17 @@ from utils import (
 router = APIRouter()
 
 
+def _is_supported_model(model: str) -> bool:
+    """内置 deepseek/gemini；custom 仅在配置了网关地址时可用。"""
+    if model in ("deepseek", "gemini"):
+        return True
+    if model == "custom":
+        from config import CUSTOM_LLM_BASE_URL
+
+        return bool(CUSTOM_LLM_BASE_URL)
+    return False
+
+
 @router.get("/health", tags=["系统"])
 def health_check():
     chanlun_global_limiter.prune_stale_keys()
@@ -55,9 +66,9 @@ def get_settings():
 
 
 @router.put("/api/settings", tags=["系统"])
-def update_settings(model: str = Query(..., description="AI 模型 deepseek / gemini")):
-    if model not in ("deepseek", "gemini"):
-        raise HTTPException(status_code=400, detail="只支持 deepseek 和 gemini")
+def update_settings(model: str = Query(..., description="AI 模型 deepseek / gemini / custom")):
+    if not _is_supported_model(model):
+        raise HTTPException(status_code=400, detail="只支持 deepseek / gemini / custom")
     set_llm_model(model)
     s = load_settings()
     s["ai_model"] = model

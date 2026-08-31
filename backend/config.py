@@ -34,6 +34,12 @@ TRUST_X_FORWARDED_FOR: bool = _truthy("TRUST_X_FORWARDED_FOR", default=False)
 # https://api.deepseek.com — 当前推荐 deepseek-v4-pro
 DEEPSEEK_MODEL_ID: str = os.environ.get("DEEPSEEK_MODEL_ID", "deepseek-v4-pro").strip() or "deepseek-v4-pro"
 
+# 自定义 OpenAI 兼容网关（模型名如 deepseek-v4-flash#claude，经 one-api/new-api 等网关转发）
+# 设置 CUSTOM_LLM_BASE_URL 后即启用 custom 模型；CUSTOM_LLM_MODEL_ID 缺省回退 DEEPSEEK_MODEL_ID
+CUSTOM_LLM_BASE_URL: str = os.environ.get("CUSTOM_LLM_BASE_URL", "").strip().rstrip("/")
+CUSTOM_LLM_API_KEY: str = os.environ.get("CUSTOM_LLM_API_KEY", "").strip()
+CUSTOM_LLM_MODEL_ID: str = os.environ.get("CUSTOM_LLM_MODEL_ID", "").strip() or DEEPSEEK_MODEL_ID
+
 # 选股缠论并发（默认 12，可通过环境变量调低以减轻行情源压力）
 SCREENING_WORKERS: int = max(1, min(32, int(os.environ.get("SCREENING_WORKERS", "12") or "12")))
 

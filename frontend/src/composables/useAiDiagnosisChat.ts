@@ -21,7 +21,7 @@ const DEFAULT_SUGGESTIONS = [
 export function useAiDiagnosisChat(
   stockCode: MaybeRefOrGetter<string>,
   sessionPrefix = 'session',
-  options?: { showErrorToast?: boolean },
+  options?: { showErrorToast?: boolean; model?: string },
 ) {
   const messages = ref<ChatMessage[]>([])
   const inputText = ref('')
@@ -29,6 +29,7 @@ export function useAiDiagnosisChat(
   const msgListRef = ref<HTMLElement>()
   const inputRef = ref<HTMLTextAreaElement>()
   const sessionId = ref('')
+  const model = options?.model ?? 'deepseek'
 
   function resetSession() {
     const code = toValue(stockCode)
@@ -124,7 +125,7 @@ export function useAiDiagnosisChat(
         code,
         text,
         sessionId.value,
-        'deepseek',
+        model,
         ctrl.signal,
       )
 
