@@ -58,6 +58,15 @@
             <label class="indicator-item">
               <input
                 type="checkbox"
+                :checked="indicators.biZhongshus"
+                @change="store.toggleIndicator('biZhongshus')"
+              />
+              <span class="indicator-dot" style="background: rgba(47,155,255,0.45); border: 1px dashed #2F9BFF"></span>
+              <span>笔中枢</span>
+            </label>
+            <label class="indicator-item">
+              <input
+                type="checkbox"
                 :checked="indicators.xiangs"
                 @change="store.toggleIndicator('xiangs')"
               />
@@ -71,7 +80,7 @@
                 @change="store.toggleIndicator('zhongshus')"
               />
               <span class="indicator-dot" style="background: #FF4D6D; opacity: 0.85"></span>
-              <span>中枢</span>
+              <span>线段中枢</span>
             </label>
             <label class="indicator-item">
               <input
@@ -89,7 +98,7 @@
                 @change="store.toggleIndicator('aiLines')"
               />
               <span class="indicator-dot" style="background: #d29922"></span>
-              <span>AI 信号线</span>
+              <span>入场/止盈止损</span>
             </label>
             <label class="indicator-item">
               <input

@@ -13,6 +13,7 @@ export type IndexedSignal = Signal & { _idx: number }
 
 export type ChanlunOverlayPayload = {
   bis: IndexedRange<Bi>[]
+  biZhongshus: IndexedRange<Zhongshu>[]
   xiangs: IndexedRange<XiangSegment>[]
   zhongshus: IndexedRange<Zhongshu>[]
   signals: IndexedSignal[]
@@ -24,6 +25,7 @@ export type ChanlunOverlayPayload = {
 
 export type ChanlunOverlayFlags = {
   bis: boolean
+  biZhongshus: boolean
   xiangs: boolean
   zhongshus: boolean
   signals: boolean
@@ -35,6 +37,8 @@ export type ChanlunOverlayTheme = {
   upColor: string
   downColor: string
   biColor: string
+  biZhongshuStroke: string
+  biZhongshuFill: string
   segmentColor: string
   zhongshuStroke: string
   zhongshuFill: string
@@ -54,6 +58,8 @@ export const CHANLUN_OVERLAY_THEME_PC: ChanlunOverlayTheme = {
   upColor: CHART_PALETTE.klineUp,
   downColor: CHART_PALETTE.klineDown,
   biColor: CHART_PALETTE.bi,
+  biZhongshuStroke: CHART_PALETTE.biZhongshuStroke,
+  biZhongshuFill: CHART_PALETTE.biZhongshuFill,
   segmentColor: CHART_PALETTE.segment,
   zhongshuStroke: CHART_PALETTE.zhongshuStroke,
   zhongshuFill: CHART_PALETTE.zhongshuFill,
@@ -73,6 +79,8 @@ export const CHANLUN_OVERLAY_THEME_MOBILE: ChanlunOverlayTheme = {
   upColor: CHART_PALETTE.klineUp,
   downColor: CHART_PALETTE.klineDown,
   biColor: CHART_PALETTE.bi,
+  biZhongshuStroke: CHART_PALETTE.biZhongshuStroke,
+  biZhongshuFill: CHART_PALETTE.biZhongshuFill,
   segmentColor: CHART_PALETTE.segment,
   zhongshuStroke: CHART_PALETTE.zhongshuStroke,
   zhongshuFill: CHART_PALETTE.zhongshuFill,
@@ -88,17 +96,27 @@ export const CHANLUN_OVERLAY_THEME_MOBILE: ChanlunOverlayTheme = {
   sellColors: { '一卖': '#ef4444', '二卖': '#ff7b72', '三卖': '#da3633' },
 }
 
-type DataZoomSlice = { startValue?: number; endValue?: number; start?: number; end?: number }
+type DataZoomSlice = { startValue?: number | string; endValue?: number | string; start?: number; end?: number }
 
 export function resolveDataZoomViewRange(
   datesLength: number,
   dataZoom?: DataZoomSlice[],
 ): { viewS: number; viewE: number } {
+  if (datesLength <= 0) return { viewS: 0, viewE: 0 }
   const dz0 = dataZoom?.[0]
-  const vStart = dz0?.startValue ?? 0
-  const vEnd = dz0?.endValue ?? (datesLength - 1)
-  const viewS = Math.max(0, Math.min(Number(vStart) || 0, datesLength - 1))
-  const viewE = Math.max(viewS, Math.min(Number(vEnd) || (datesLength - 1), datesLength - 1))
+  const maxIndex = datesLength - 1
+  const startValue = Number(dz0?.startValue)
+  const endValue = Number(dz0?.endValue)
+  const percentStart = Number(dz0?.start)
+  const percentEnd = Number(dz0?.end)
+  const rawStart = Number.isFinite(startValue)
+    ? startValue
+    : (Number.isFinite(percentStart) ? Math.floor(maxIndex * percentStart / 100) : 0)
+  const rawEnd = Number.isFinite(endValue)
+    ? endValue
+    : (Number.isFinite(percentEnd) ? Math.ceil(maxIndex * percentEnd / 100) : maxIndex)
+  const viewS = Math.max(0, Math.min(rawStart, maxIndex))
+  const viewE = Math.max(viewS, Math.min(rawEnd, maxIndex))
   return { viewS, viewE }
 }
 
@@ -119,6 +137,7 @@ export function buildChanlunOverlayCache(params: {
   dates: string[]
   seriesKlines: KLine[]
   bis: Bi[]
+  biZhongshus?: Zhongshu[]
   xiangs?: XiangSegment[]
   zhongshus: Zhongshu[]
   signals: Signal[]
@@ -131,6 +150,7 @@ export function buildChanlunOverlayCache(params: {
     dates,
     seriesKlines,
     bis,
+    biZhongshus = [],
     xiangs,
     zhongshus,
     signals,
@@ -147,6 +167,10 @@ export function buildChanlunOverlayCache(params: {
     bis: flags.bis ? bis.flatMap(b => {
       const r = resolveBarRange(b.start, b.end, nBar, dates, dateLookup)
       return r ? [{ ...b, _s: r[0], _e: r[1] }] : []
+    }) : [],
+    biZhongshus: flags.biZhongshus ? biZhongshus.flatMap(z => {
+      const r = resolveBarRange(z.start, z.end, nBar, dates, dateLookup)
+      return r ? [{ ...z, _s: r[0], _e: r[1] }] : []
     }) : [],
     xiangs: flags.xiangs && xiangs ? xiangs.flatMap(x => {
       const r = resolveBarRange(x.start, x.end, nBar, dates, dateLookup)
@@ -185,57 +209,52 @@ export function buildChanlunGraphicChildren(ctx: {
   const priceAt = ctx.priceAtIdx ?? (() => 0)
   const children: GraphicElement[] = []
 
-  const { bis, xiangs, zhongshus, signals, aiSignal, supportResistance, dualCrossIndices } = data
+  const { bis, biZhongshus, xiangs, zhongshus, signals, aiSignal, supportResistance, dualCrossIndices } = data
 
-  for (const zs of zhongshus) {
-    if (zs._e < viewS || zs._s > viewE || zs._e < zs._s) continue
-    const a = pixelAtIdxCached(zs._s, zs.range_high)
-    const b = pixelAtIdxCached(zs._e, zs.range_low)
-    if (!a || !b) continue
-    const xPx1 = Math.min(a[0], b[0])
-    const xPx2 = Math.max(a[0], b[0])
-    const yPx1 = Math.min(a[1], b[1])
-    const yPx2 = Math.max(a[1], b[1])
-    children.push({
-      type: 'rect',
-      shape: {
-        x: xPx1,
-        y: yPx1,
-        width: Math.max(xPx2 - xPx1, 4),
-        height: Math.max(yPx2 - yPx1, 1),
-      },
-      style: {
-        fill: theme.zhongshuFill,
-        stroke: theme.zhongshuStroke,
-        lineWidth: 1.25,
-        lineDash: zs.confirmed === false ? [6, 4] : undefined,
-      },
-      z: 96,
-      silent: true,
-    })
-    children.push({
-      type: 'text',
-      style: {
-        text: zs.range_high.toFixed(2),
-        fill: theme.zhongshuStroke,
-        fontSize: theme.zsLabelFontSize,
-        fontFamily: theme.labelFont,
-      },
-      x: xPx1 + 3, y: yPx1 + 12,
-      z: 97, silent: true,
-    })
-    children.push({
-      type: 'text',
-      style: {
-        text: zs.range_low.toFixed(2),
-        fill: theme.zhongshuStroke,
-        fontSize: theme.zsLabelFontSize,
-        fontFamily: theme.labelFont,
-      },
-      x: xPx1 + 3, y: yPx2 - 2,
-      z: 97, silent: true,
-    })
+  const appendZhongshuRects = (
+    items: IndexedRange<Zhongshu>[],
+    stroke: string,
+    fill: string,
+    dashed: boolean,
+    z: number,
+  ) => {
+    for (const zs of items) {
+      if (zs._e < viewS || zs._s > viewE || zs._e < zs._s) continue
+      const a = pixelAtIdxCached(zs._s, zs.range_high)
+      const b = pixelAtIdxCached(zs._e, zs.range_low)
+      if (!a || !b) continue
+      const xPx1 = Math.min(a[0], b[0])
+      const xPx2 = Math.max(a[0], b[0])
+      const yPx1 = Math.min(a[1], b[1])
+      const yPx2 = Math.max(a[1], b[1])
+      children.push({
+        type: 'rect',
+        shape: { x: xPx1, y: yPx1, width: Math.max(xPx2 - xPx1, 4), height: Math.max(yPx2 - yPx1, 1) },
+        style: {
+          fill,
+          stroke,
+          lineWidth: dashed ? 1 : 1.35,
+          lineDash: dashed || zs.confirmed === false ? [6, 4] : undefined,
+        },
+        z, silent: true,
+      })
+      children.push({
+        type: 'text',
+        style: {
+          text: `${zs.range_high.toFixed(2)} / ${zs.range_low.toFixed(2)}`,
+          fill: stroke,
+          fontSize: theme.zsLabelFontSize,
+          fontFamily: theme.labelFont,
+        },
+        x: xPx1 + 4, y: yPx1 + 12,
+        z: z + 1, silent: true,
+      })
+    }
   }
+
+  // 笔中枢：蓝色虚线浅填充；线段中枢：红色实线深填充。
+  appendZhongshuRects(biZhongshus, theme.biZhongshuStroke, theme.biZhongshuFill, true, 94)
+  appendZhongshuRects(zhongshus, theme.zhongshuStroke, theme.zhongshuFill, false, 96)
 
   const appendStructurePolylines = <T extends IndexedRange<Bi | XiangSegment>>(
     items: T[],
@@ -245,12 +264,20 @@ export function buildChanlunGraphicChildren(ctx: {
   ) => {
     let points: [number, number][] = []
     let previousEnd = -1
-    const flush = () => {
+    const flush = (dashed = false) => {
       if (points.length >= 2) {
         children.push({
           type: 'polyline',
           shape: { points },
-          style: { stroke: color, fill: null, lineWidth, opacity: 0.96, lineJoin: 'round', lineCap: 'round' },
+          style: {
+            stroke: color,
+            fill: null,
+            lineWidth,
+            opacity: dashed ? 0.78 : 0.96,
+            lineDash: dashed ? [7, 5] : undefined,
+            lineJoin: 'round',
+            lineCap: 'round',
+          },
           z, silent: true,
         })
       }
@@ -264,6 +291,13 @@ export function buildChanlunGraphicChildren(ctx: {
       const p1 = pixelAtIdxCached(item._s, startPrice)
       const p2 = pixelAtIdxCached(item._e, endPrice)
       if (!p1 || !p2) continue
+      if (item.confirmed === false) {
+        flush()
+        points = [p1, p2]
+        flush(true)
+        previousEnd = item._e
+        continue
+      }
       if (points.length && previousEnd === item._s) points.push(p2)
       else {
         flush()

@@ -51,9 +51,13 @@ import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
-import { calcMA, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
+import { calcMA, calcMACDHistogram, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
 import { downsampleKlines, klineSeriesSignature } from '@/utils/chartDownsample'
-import { normDateTime } from '@/utils/chartDateUtils'
+import {
+  formatAdaptiveTimeAxisLabel,
+  normDateTime,
+  percentToVisibleIndexRange,
+} from '@/utils/chartDateUtils'
 import { CHART_PALETTE } from '@/utils/chartPalette'
 import { setChartOptionKeepDataZoom } from '@/utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '@/composables/useDebounce'
@@ -72,6 +76,7 @@ const SWIPE_THRESHOLD = 50
 const props = defineProps<{
   klines: KLine[]
   bis: Bi[]
+  biZhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   xiangs?: XiangSegment[]
@@ -91,6 +96,7 @@ let chart: echarts.ECharts | null = null
 
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
   ...props.bis.flatMap(item => [item.start, item.end]),
+  ...(props.biZhongshus ?? []).flatMap(item => [item.start, item.end]),
   ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
   ...props.zhongshus.flatMap(item => [item.start, item.end]),
   ...props.signals.map(item => item.datetime),
@@ -98,6 +104,7 @@ const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
 const klineIndicators = useKlineIndicators(displayKlines)
 
 let graphicRaf = 0
+let timeAxisRaf = 0
 let resizeObserver: ResizeObserver | null = null
 let longPressTimer: ReturnType<typeof setTimeout> | null = null
 let touchStartX = 0
@@ -112,8 +119,8 @@ type DataZoomOption = { startValue?: number; endValue?: number; start?: number; 
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
-    bis: true, xiangs: false, zhongshus: true,
-    signals: true, aiLines: true, supportResistance: true,
+    bis: true, biZhongshus: true, xiangs: true, zhongshus: true,
+    signals: true, aiLines: false, supportResistance: false,
     volume: true, macd: false, rsi: false, skdj: false,
     ...(props.indicators || {})
   }
@@ -125,6 +132,36 @@ let lastDisplayKlines: KLine[] = []
 let lastMa5: (number | null)[] = []
 let lastMa20: (number | null)[] = []
 let lastMa60: (number | null)[] = []
+let timeAxisViewStart = 0
+let timeAxisViewEnd = 0
+
+function adaptiveTimeAxisFormatter(value: string | number, index: number): string {
+  return formatAdaptiveTimeAxisLabel(String(value), index, lastDates, timeAxisViewStart, timeAxisViewEnd, 6)
+}
+
+function syncAdaptiveTimeAxis(refreshAxis = true) {
+  if (!chart || !lastDates.length) return
+  const option = chart.getOption() as { dataZoom?: DataZoomOption[]; xAxis?: unknown[] }
+  const { viewS, viewE } = resolveDataZoomViewRange(lastDates.length, option.dataZoom)
+  if (viewS === timeAxisViewStart && viewE === timeAxisViewEnd) return
+  timeAxisViewStart = viewS
+  timeAxisViewEnd = viewE
+  if (refreshAxis) {
+    chart.setOption({
+      xAxis: Array.from({ length: option.xAxis?.length ?? 1 }, () => ({
+        axisLabel: { formatter: adaptiveTimeAxisFormatter },
+      })),
+    })
+  }
+}
+
+function queueAdaptiveTimeAxis() {
+  cancelAnimationFrame(timeAxisRaf)
+  timeAxisRaf = requestAnimationFrame(() => {
+    timeAxisRaf = 0
+    syncAdaptiveTimeAxis()
+  })
+}
 
 function fmtPrice(v: number | null | undefined): string {
   if (v == null || Number.isNaN(v)) return '—'
@@ -149,6 +186,8 @@ const UP_COLOR = CHART_PALETTE.klineUp
 const DOWN_COLOR = CHART_PALETTE.klineDown
 const GRID_COLOR = 'rgba(255,255,255,0.06)'
 const TEXT_COLOR = '#64748b'
+const GRID_LEFT = 52
+const GRID_RIGHT = 8
 
 // ── pixelAt ─────────────────────────────────────────────────────────────────
 function pixelAtIdx(i: number, price: number): [number, number] | null {
@@ -196,6 +235,7 @@ function buildOverlayData(): ChanlunOverlayPayload {
     dates: lastDates,
     seriesKlines: chartKlines,
     bis: props.bis,
+    biZhongshus: props.biZhongshus,
     xiangs: props.xiangs,
     zhongshus: props.zhongshus,
     signals: props.signals,
@@ -203,6 +243,7 @@ function buildOverlayData(): ChanlunOverlayPayload {
     supportResistance: props.supportResistance,
     flags: {
       bis: ind.bis,
+      biZhongshus: ind.biZhongshus,
       xiangs: ind.xiangs,
       zhongshus: ind.zhongshus,
       signals: ind.signals,
@@ -265,19 +306,28 @@ function buildOption(chartH: number = 300) {
   const zoomEnd = props.zoomEnd ?? 100
 
   lastDates = dates
+  const initialTimeRange = percentToVisibleIndexRange(dates.length, zoomStart, zoomEnd)
+  timeAxisViewStart = initialTimeRange[0]
+  timeAxisViewEnd = initialTimeRange[1]
   lastMa5 = ind.ma5 ? calcMA(closes, 5) : []
   lastMa20 = ind.ma20 ? calcMA(closes, 20) : []
   lastMa60 = ind.ma60 ? calcMA(closes, 60) : []
 
   const macdData = indData.macd
+  const macdHistogram = macdData ? calcMACDHistogram(macdData.dif, macdData.dea) : []
   const skdjData = indData.sk && indData.sd ? { sk: indData.sk, sd: indData.sd } : null
   const rsiData = indData.rsi
 
   // 副图开关
-  const subCount = [ind.volume, ind.macd, ind.rsi, ind.skdj].filter(Boolean).length
+  const subCount = [
+    ind.volume,
+    ind.macd && Boolean(macdData),
+    ind.rsi && Boolean(rsiData),
+    ind.skdj && Boolean(skdjData),
+  ].filter(Boolean).length
   const chartHeight = chartH
-  const gap = 6
-  const subHeight = subCount > 0 ? ((chartHeight * 0.6 - gap) / subCount) : 0
+  const gap = 12
+  const subHeight = subCount > 0 ? ((chartHeight * 0.6 - gap - 24) / subCount) : 0
   const mainH = subCount > 0 ? chartHeight * 0.38 : chartHeight
 
   // grid index: 0 = main, 1..N = sub-charts
@@ -287,7 +337,9 @@ function buildOption(chartH: number = 300) {
   const seriesList: Record<string, unknown>[] = []
 
   // Main grid
-  grids.push({ left: 8, right: 8, top: 8, bottom: subCount > 0 ? subCount * subHeight + gap * subCount + 4 : 16 })
+  grids.push(subCount > 0
+    ? { left: GRID_LEFT, right: GRID_RIGHT, top: 8, height: mainH - gap }
+    : { left: GRID_LEFT, right: GRID_RIGHT, top: 8, bottom: 28 })
 
   // K线
   seriesList.push({
@@ -308,14 +360,18 @@ function buildOption(chartH: number = 300) {
   xAxes.push({ type: 'category', data: dates, gridIndex: 0, boundaryGap: true,
     axisLine: { lineStyle: { color: GRID_COLOR } },
     axisTick: { show: false },
-    axisLabel: { color: TEXT_COLOR, fontSize: 9, show: false },
+    axisLabel: { color: TEXT_COLOR, fontSize: 9, interval: 0, show: subCount === 0, formatter: adaptiveTimeAxisFormatter },
     splitLine: { show: false } })
 
   // Main yAxis
-  yAxes.push({ scale: true, gridIndex: 0,
+  yAxes.push({ scale: true, gridIndex: 0, position: 'left',
     splitLine: { lineStyle: { color: 'rgba(255,255,255,0.05)', type: 'dashed' } },
-    axisLabel: { color: TEXT_COLOR, fontSize: 9 },
-    axisLine: { show: false }, axisTick: { show: false } })
+    axisLabel: {
+      color: TEXT_COLOR, fontSize: 9, margin: 6,
+      showMinLabel: false, hideOverlap: true,
+      formatter: (v: number) => Number(v).toFixed(2),
+    },
+    axisLine: { show: true, lineStyle: { color: GRID_COLOR } }, axisTick: { show: false } })
 
   // 副图：成交量 / MACD / RSI / SKDJ
   let subIdx = 1
@@ -325,8 +381,8 @@ function buildOption(chartH: number = 300) {
       itemStyle: { color: klines[i].close >= klines[i].open ? UP_COLOR + '66' : DOWN_COLOR + '66' }
     }) },
     { key: 'macd' as const, label: 'MACD', color: '#38bdf8', calc: (i: number) => ({
-      value: macdData!.dif[i],
-      itemStyle: { color: macdData!.dif[i] >= 0 ? UP_COLOR : DOWN_COLOR }
+      value: macdHistogram[i],
+      itemStyle: { color: macdHistogram[i] >= 0 ? UP_COLOR : DOWN_COLOR }
     }) },
     { key: 'rsi' as const, label: 'RSI', color: '#f59e0b', calc: (i: number) => ({
       value: rsiData![i] ?? null,
@@ -343,18 +399,21 @@ function buildOption(chartH: number = 300) {
     if (def.key === 'macd' && !macdData) continue
     if (def.key === 'rsi' && !rsiData) continue
     if (def.key === 'skdj' && !skdjData) continue
-    const bottom = subCount * subHeight + (subIdx - 1) * (subHeight + gap) + 4
-    grids.push({ left: 8, right: 8, top: mainH + (subIdx - 1) * (subHeight + gap) + gap, height: subHeight, bottom: undefined })
+    grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: mainH + (subIdx - 1) * (subHeight + gap) + gap, height: subHeight, bottom: undefined })
 
     xAxes.push({ type: 'category', data: dates, gridIndex: subIdx, boundaryGap: true,
       axisLine: { lineStyle: { color: GRID_COLOR } },
       axisTick: { show: false },
-      axisLabel: { color: TEXT_COLOR, fontSize: 9, show: subIdx === grids.length - 1 },
+      axisLabel: { color: TEXT_COLOR, fontSize: 9, interval: 0, show: subIdx === subCount, formatter: adaptiveTimeAxisFormatter },
       splitLine: { show: false } })
 
-    yAxes.push({ scale: true, gridIndex: subIdx,
+    yAxes.push({ scale: true, gridIndex: subIdx, position: 'left',
       splitLine: { show: false },
-      axisLabel: { color: TEXT_COLOR, fontSize: 9, formatter: (v: number) => v.toFixed(0) },
+      axisLabel: {
+        color: TEXT_COLOR, fontSize: 9,
+        showMaxLabel: false, hideOverlap: true,
+        formatter: (v: number) => v.toFixed(0),
+      },
       axisLine: { show: false }, axisTick: { show: false },
       max: def.key === 'volume' || def.key === 'macd' ? undefined : 100,
       min: def.key === 'rsi' || def.key === 'skdj' ? 0 : undefined })
@@ -403,9 +462,14 @@ function buildOption(chartH: number = 300) {
       { type: 'inside', xAxisIndex: Array.from({ length: grids.length }, (_, i) => i), start: zoomStart, end: zoomEnd },
     ],
     series: seriesList,
+    axisPointer: {
+      link: [{ xAxisIndex: 'all' }],
+      lineStyle: { color: '#484f58', type: 'dashed', width: 1 },
+      label: { show: false },
+    },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'cross',
-        lineStyle: { color: '#484f58' },
+        lineStyle: { color: '#484f58', type: 'dashed', width: 1 },
         label: { show: true, backgroundColor: '#1a222d', color: '#f0f4f8', fontSize: 11,
           formatter: (p: { axisDimension?: string; value?: unknown }) =>
             p.axisDimension === 'y' && p.value != null ? Number(p.value).toFixed(2) : (p.value != null ? String(p.value) : '')
@@ -463,9 +527,13 @@ function initChart() {
   chart.on('dataZoom', () => {
     const dz = (chart?.getOption() as { dataZoom?: DataZoomOption[] } | undefined)?.dataZoom?.[0]
     if (dz && dz.start != null && dz.end != null) emit('zoomChange', dz.start, dz.end)
+    queueAdaptiveTimeAxis()
     queueGraphic()
   })
-  chart.on('finished', () => queueGraphic())
+  chart.on('finished', () => {
+    queueAdaptiveTimeAxis()
+    queueGraphic()
+  })
 }
 
 let lastKlineSig = ''
@@ -526,6 +594,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelAnimationFrame(timeAxisRaf)
   cancelAnimationFrame(graphicRaf)
   resizeObserver?.disconnect()
   if (longPressTimer) clearTimeout(longPressTimer)
@@ -595,7 +664,7 @@ watch(
 )
 
 watch(
-  () => [props.bis, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
+  () => [props.bis, props.biZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
   updateOverlayOnly,
   { deep: true }
 )
@@ -603,6 +672,7 @@ watch(
 watch(
   () => [
     props.indicators?.bis,
+    props.indicators?.biZhongshus,
     props.indicators?.xiangs,
     props.indicators?.zhongshus,
     props.indicators?.signals,

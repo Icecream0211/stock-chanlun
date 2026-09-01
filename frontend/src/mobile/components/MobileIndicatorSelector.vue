@@ -102,10 +102,11 @@ const mainInds = [
 
 const chanlunInds = [
   { key: 'bis' as const, label: '笔', dotStyle: { background: '#2F9BFF' } },
+  { key: 'biZhongshus' as const, label: '笔中枢', dotStyle: { background: 'rgba(47,155,255,0.45)', border: '1px dashed #2F9BFF' } },
   { key: 'xiangs' as const, label: '线段', dotStyle: { background: '#FF8C42' } },
-  { key: 'zhongshus' as const, label: '中枢', dotStyle: { background: '#FF4D6D' } },
+  { key: 'zhongshus' as const, label: '线段中枢', dotStyle: { background: '#FF4D6D' } },
   { key: 'signals' as const, label: '买卖点', dotStyle: { background: '#3fb950' } },
-  { key: 'aiLines' as const, label: 'AI信号线', dotStyle: { background: '#d29922' } },
+  { key: 'aiLines' as const, label: '入场/止盈止损', dotStyle: { background: '#d29922' } },
   { key: 'supportResistance' as const, label: '支撑阻力', dotStyle: { background: 'linear-gradient(90deg, #3fb950, #f85149)' } },
 ]
 

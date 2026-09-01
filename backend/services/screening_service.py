@@ -11,10 +11,10 @@ from core.chanlun_analysis import SCREENING_KLINE_LIMIT, run_analysis
 from core.kline_serialize import analysis_klines_to_df
 from services.akshare_service import (
     get_daily_hot_stocks,
-    get_realtime_quote,
     get_stock_boards_em,
     get_stock_info,
 )
+from services.market_data_service import get_realtime_quote
 from config import SCREENING_WORKERS
 from core.indicators import calc_macd_lists, calc_skdj_lists, find_latest_dual_cross_bar
 

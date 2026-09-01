@@ -12,6 +12,17 @@ describe('chartOverlayCore', () => {
     expect(viewE).toBe(99)
   })
 
+  it('falls back to zoom percentages when category startValue is a date string', () => {
+    const { viewS, viewE } = resolveDataZoomViewRange(101, [{
+      startValue: '2025-01-01',
+      endValue: '2026-01-01',
+      start: 70,
+      end: 90,
+    }])
+    expect(viewS).toBe(70)
+    expect(viewE).toBe(90)
+  })
+
   it('buildChanlunOverlayCache maps bis to bar indices', () => {
     const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
     const klines = dates.map((d, i) => ({
@@ -39,6 +50,7 @@ describe('chartOverlayCore', () => {
       signals: [],
       flags: {
         bis: true,
+        biZhongshus: false,
         xiangs: false,
         zhongshus: false,
         signals: false,
@@ -62,13 +74,13 @@ describe('chartOverlayCore', () => {
         { id: 'b2', start: dates[1], end: dates[2], direction: 'down', high: 12, low: 9, start_price: 12, end_price: 9 },
       ],
       zhongshus: [], signals: [],
-      flags: { bis: true, xiangs: false, zhongshus: false, signals: false, aiLines: false, supportResistance: false },
+      flags: { bis: true, biZhongshus: false, xiangs: false, zhongshus: false, signals: false, aiLines: false, supportResistance: false },
     })
     const children = buildChanlunGraphicChildren({
       data, viewS: 0, viewE: 2, gridLeft: 0, gridRight: 200,
       pixelAtIdx: (i, price) => [i * 100, price],
       theme: {
-        upColor: '#f00', downColor: '#0f0', biColor: '#29f', segmentColor: '#f80',
+        upColor: '#f00', downColor: '#0f0', biColor: '#29f', biZhongshuStroke: '#29f', biZhongshuFill: 'rgba(0,0,255,.1)', segmentColor: '#f80',
         zhongshuStroke: '#f36', zhongshuFill: 'rgba(255,0,0,.1)', strokeBg: '#000',
         labelFont: 'sans-serif', signalRadius: 8, signalFontSize: 11, zsLabelFontSize: 9,
         srLabelFontSize: 9, aiFontSize: 11, resonanceFontSize: 9, buyColors: {}, sellColors: {},
@@ -79,19 +91,52 @@ describe('chartOverlayCore', () => {
     expect((polylines[0].shape as { points: unknown[] }).points).toHaveLength(3)
   })
 
+  it('renders the virtual tail connected to the confirmed pen with a dashed style', () => {
+    const dates = ['2024-01-02', '2024-01-03', '2024-01-04', '2024-01-05']
+    const seriesKlines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))
+    const data = buildChanlunOverlayCache({
+      dates,
+      seriesKlines,
+      bis: [
+        { id: 'b1', start: dates[0], end: dates[1], direction: 'up', high: 12, low: 9, start_price: 9, end_price: 12 },
+        { id: 'b2', start: dates[1], end: dates[2], direction: 'down', high: 12, low: 10, start_price: 12, end_price: 10 },
+        { id: 'b3', start: dates[2], end: dates[3], direction: 'up', high: 11.5, low: 10, start_price: 10, end_price: 11.5, confirmed: false },
+      ],
+      zhongshus: [], signals: [],
+      flags: { bis: true, biZhongshus: false, xiangs: false, zhongshus: false, signals: false, aiLines: false, supportResistance: false },
+    })
+    const children = buildChanlunGraphicChildren({
+      data, viewS: 0, viewE: 3, gridLeft: 0, gridRight: 300,
+      pixelAtIdx: (i, price) => [i * 100, price],
+      theme: {
+        upColor: '#f00', downColor: '#0f0', biColor: '#29f', biZhongshuStroke: '#29f', biZhongshuFill: 'rgba(0,0,255,.1)', segmentColor: '#f80',
+        zhongshuStroke: '#f36', zhongshuFill: 'rgba(255,0,0,.1)', strokeBg: '#000',
+        labelFont: 'sans-serif', signalRadius: 8, signalFontSize: 11, zsLabelFontSize: 9,
+        srLabelFontSize: 9, aiFontSize: 11, resonanceFontSize: 9, buyColors: {}, sellColors: {},
+      },
+    })
+
+    const polylines = children.filter(item => item.type === 'polyline')
+    expect(polylines).toHaveLength(2)
+    const confirmedPoints = (polylines[0].shape as { points: number[][] }).points
+    const virtualPoints = (polylines[1].shape as { points: number[][] }).points
+    expect(confirmedPoints.at(-1)).toEqual(virtualPoints[0])
+    expect((polylines[1].style as { lineDash?: number[] }).lineDash).toEqual([7, 5])
+  })
+
   it('renders a non-zero zhongshu rectangle using ECharts shape coordinates', () => {
     const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
     const seriesKlines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))
     const data = buildChanlunOverlayCache({
       dates, seriesKlines, bis: [], signals: [],
       zhongshus: [{ id: 'zs1', start: dates[0], end: dates[2], range_high: 11, range_low: 9 }],
-      flags: { bis: false, xiangs: false, zhongshus: true, signals: false, aiLines: false, supportResistance: false },
+      flags: { bis: false, biZhongshus: false, xiangs: false, zhongshus: true, signals: false, aiLines: false, supportResistance: false },
     })
     const children = buildChanlunGraphicChildren({
       data, viewS: 0, viewE: 2, gridLeft: 0, gridRight: 200,
       pixelAtIdx: (i, price) => [i * 100, 100 - price],
       theme: {
-        upColor: '#f00', downColor: '#0f0', biColor: '#29f', segmentColor: '#f80',
+        upColor: '#f00', downColor: '#0f0', biColor: '#29f', biZhongshuStroke: '#29f', biZhongshuFill: 'rgba(0,0,255,.1)', segmentColor: '#f80',
         zhongshuStroke: '#f36', zhongshuFill: 'rgba(255,0,0,.1)', strokeBg: '#000',
         labelFont: 'sans-serif', signalRadius: 8, signalFontSize: 11, zsLabelFontSize: 9,
         srLabelFontSize: 9, aiFontSize: 11, resonanceFontSize: 9, buyColors: {}, sellColors: {},
@@ -100,5 +145,37 @@ describe('chartOverlayCore', () => {
     const rect = children.find(item => item.type === 'rect')
     expect(rect).toBeDefined()
     expect((rect?.shape as { width: number }).width).toBe(200)
+  })
+
+  it('renders pen and segment centers with distinct colors and line styles', () => {
+    const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
+    const seriesKlines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))
+    const data = buildChanlunOverlayCache({
+      dates,
+      seriesKlines,
+      bis: [],
+      biZhongshus: [{ id: 'bi-zs', start: dates[0], end: dates[1], range_high: 10.5, range_low: 9.5 }],
+      zhongshus: [{ id: 'seg-zs', start: dates[1], end: dates[2], range_high: 11, range_low: 10 }],
+      signals: [],
+      flags: { bis: false, biZhongshus: true, xiangs: false, zhongshus: true, signals: false, aiLines: false, supportResistance: false },
+    })
+    const children = buildChanlunGraphicChildren({
+      data, viewS: 0, viewE: 2, gridLeft: 0, gridRight: 200,
+      pixelAtIdx: (i, price) => [i * 100, 100 - price],
+      theme: {
+        upColor: '#f00', downColor: '#0f0', biColor: '#29f', biZhongshuStroke: '#29f', biZhongshuFill: 'rgba(0,0,255,.1)', segmentColor: '#f80',
+        zhongshuStroke: '#f36', zhongshuFill: 'rgba(255,0,0,.1)', strokeBg: '#000',
+        labelFont: 'sans-serif', signalRadius: 8, signalFontSize: 11, zsLabelFontSize: 9,
+        srLabelFontSize: 9, aiFontSize: 11, resonanceFontSize: 9, buyColors: {}, sellColors: {},
+      },
+    })
+    const rects = children.filter(item => item.type === 'rect')
+    const penStyle = rects[0].style as { stroke?: string; lineDash?: number[] }
+    const segmentStyle = rects[1].style as { stroke?: string; lineDash?: number[] }
+    expect(rects).toHaveLength(2)
+    expect(penStyle.stroke).toBe('#29f')
+    expect(penStyle.lineDash).toEqual([6, 4])
+    expect(segmentStyle.stroke).toBe('#f36')
+    expect(segmentStyle.lineDash).toBeUndefined()
   })
 })

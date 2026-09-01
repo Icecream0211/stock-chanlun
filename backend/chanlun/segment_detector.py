@@ -38,6 +38,7 @@ class SegmentDetector:
 
         segments: list[XiangSegment] = []
         for run in self._continuous_runs():
+            run_start_count = len(segments)
             start = 0
             while len(run) - start >= min_bis:
                 end = self._find_confirmed_end(run, start, min_bis)
@@ -53,9 +54,16 @@ class SegmentDetector:
                 group = run[start:end + 1]
                 segments.append(self._build_segment(group, len(segments) + 1, confirmed))
                 if not confirmed:
+                    start = end + 1
                     break
                 # 下一线段从当前线段终点发出的反向笔开始，二者共享端点。
                 start = end + 1
+
+            # 已经出现过确认线段后，即使尾部只剩 1~2 笔，也画成未确认尾线段。
+            # 这条线段只供显示，避免相邻线段之间出现空白；确认计算仍由调用方过滤。
+            if len(segments) > run_start_count and start < len(run):
+                tail = run[start:]
+                segments.append(self._build_segment(tail, len(segments) + 1, False))
 
         return segments
 
@@ -80,6 +88,9 @@ class SegmentDetector:
         direction = run[start].direction
         # 需要后一根同方向笔（candidate + 2）确认当前极值。
         for candidate in range(first, len(run) - 2, 2):
+            # 虚拟笔只能延伸未确认尾段，不能反过来确认正式线段。
+            if not all(getattr(b, "confirmed", True) for b in run[start:candidate + 3]):
+                continue
             previous_price = run[candidate - 2].end_price
             current_price = run[candidate].end_price
             next_price = run[candidate + 2].end_price
@@ -104,7 +115,7 @@ class SegmentDetector:
             end_price=last.end_price,
             bi_ids=[b.id for b in group],
             level=2,
-            confirmed=confirmed,
+            confirmed=confirmed and all(getattr(b, "confirmed", True) for b in group),
         )
 
     def detect_zhongshus(self, segments: list[XiangSegment]) -> list[Zhongshu]:

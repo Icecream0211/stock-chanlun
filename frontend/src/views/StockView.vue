@@ -305,6 +305,7 @@
         <KLineChart
           :klines="store.klines"
           :bis="store.chanlunResult?.bis || []"
+          :bi-zhongshus="store.chanlunResult?.bi_zhongshus || []"
           :xiangs="store.chanlunResult?.xiangs || []"
           :zhongshus="store.chanlunResult?.zhongshus || []"
           :signals="store.chanlunResult?.signals || []"

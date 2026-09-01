@@ -39,9 +39,13 @@ import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import echarts from '../../utils/echarts'
 import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '../../api/stock'
 import type { IndicatorConfig } from '../../stores/chanlun'
-import { calcMA, computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
+import { calcMA, calcMACDHistogram, computeDualMacdSkdjMarkerIndices } from '../../utils/stockIndicators'
 import { downsampleKlines, klineSeriesSignature } from '../../utils/chartDownsample'
-import { formatAxisDateLabel, normDateTime } from '../../utils/chartDateUtils'
+import {
+  formatAdaptiveTimeAxisLabel,
+  normDateTime,
+  percentToVisibleIndexRange,
+} from '../../utils/chartDateUtils'
 import { CHART_PALETTE } from '../../utils/chartPalette'
 import { setChartOptionKeepDataZoom } from '../../utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '../../composables/useDebounce'
@@ -57,6 +61,7 @@ import {
 const props = defineProps<{
   klines: KLine[]
   bis: Bi[]
+  biZhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   xiangs?: XiangSegment[]
@@ -73,6 +78,7 @@ let chart: echarts.ECharts | null = null
 /** 主图渲染用降采样序列；所有结构端点作为硬锚点，避免降采样导致吸附错位。 */
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
   ...props.bis.flatMap(item => [item.start, item.end]),
+  ...(props.biZhongshus ?? []).flatMap(item => [item.start, item.end]),
   ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
   ...props.zhongshus.flatMap(item => [item.start, item.end]),
   ...props.signals.map(item => item.datetime),
@@ -83,8 +89,8 @@ const klineIndicators = useKlineIndicators(displayKlines)
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
-    bis: true, xiangs: false, zhongshus: true, signals: true, aiLines: true,
-    supportResistance: true,
+    bis: true, biZhongshus: true, xiangs: true, zhongshus: true, signals: true, aiLines: false,
+    supportResistance: false,
     volume: true, macd: true, rsi: true, skdj: true,
     ...(props.indicators || {})
   }
@@ -102,9 +108,11 @@ const MAIN_HEIGHT = 420
 const SUB_PANEL_HEIGHT = { volume: 120, macd: 120, rsi: 100, skdj: 100 } as const
 const SUB_PANEL_ORDER = ['volume', 'macd', 'rsi', 'skdj'] as const
 type SubPanelKey = (typeof SUB_PANEL_ORDER)[number]
-const SUB_GAP = 4
+const SUB_GAP = 14
 const SLIDER_BOTTOM = 5
 const SLIDER_HEIGHT = 20
+const GRID_LEFT = 62
+const GRID_RIGHT = 14
 
 function canRenderSubPanel(key: SubPanelKey, barCount: number, ind: Required<IndicatorConfig>): boolean {
   if (!ind[key]) return false
@@ -125,7 +133,7 @@ const chartHeightPx = computed(() => {
   const subs = activeSubPanels(ind, n)
   const subHeights = subs.reduce((sum, k) => sum + SUB_PANEL_HEIGHT[k], 0)
   const gaps = subs.length > 0 ? SUB_GAP * subs.length : 0
-  return MAIN_TOP + MAIN_HEIGHT + subHeights + gaps + SLIDER_BOTTOM + SLIDER_HEIGHT + 8
+  return MAIN_TOP + MAIN_HEIGHT + subHeights + gaps + SLIDER_BOTTOM + SLIDER_HEIGHT + 28
 })
 
 function fmtPrice(v: number | null | undefined): string {
@@ -137,6 +145,37 @@ let lastDates: string[] = []
 let lastMa5: (number | null)[] = []
 let lastMa20: (number | null)[] = []
 let lastMa60: (number | null)[] = []
+let timeAxisViewStart = 0
+let timeAxisViewEnd = 0
+let timeAxisRaf = 0
+
+function adaptiveTimeAxisFormatter(value: string | number, index: number): string {
+  return formatAdaptiveTimeAxisLabel(String(value), index, lastDates, timeAxisViewStart, timeAxisViewEnd)
+}
+
+function syncAdaptiveTimeAxis(refreshAxis = true) {
+  if (!chart || !lastDates.length) return
+  const option = chart.getOption() as { dataZoom?: DataZoomOption[]; xAxis?: unknown[] }
+  const { viewS, viewE } = resolveDataZoomViewRange(lastDates.length, option.dataZoom)
+  if (viewS === timeAxisViewStart && viewE === timeAxisViewEnd) return
+  timeAxisViewStart = viewS
+  timeAxisViewEnd = viewE
+  if (refreshAxis) {
+    chart.setOption({
+      xAxis: Array.from({ length: option.xAxis?.length ?? 1 }, () => ({
+        axisLabel: { formatter: adaptiveTimeAxisFormatter },
+      })),
+    })
+  }
+}
+
+function queueAdaptiveTimeAxis() {
+  cancelAnimationFrame(timeAxisRaf)
+  timeAxisRaf = requestAnimationFrame(() => {
+    timeAxisRaf = 0
+    syncAdaptiveTimeAxis()
+  })
+}
 
 function formatBarLine(idx: number): string {
   const series = displayKlines.value
@@ -165,6 +204,9 @@ function buildOption() {
   const ma60 = ind.ma60 ? calcMA(closes, 60) : []
 
   lastDates = dates; lastMa5 = ma5; lastMa20 = ma20; lastMa60 = ma60
+  const initialTimeRange = percentToVisibleIndexRange(dates.length, 70, 100)
+  timeAxisViewStart = initialTimeRange[0]
+  timeAxisViewEnd = initialTimeRange[1]
 
   syncChanlunOverlayCache()
 
@@ -195,9 +237,9 @@ function buildOption() {
   const yAxes: Record<string, unknown>[] = []
 
   if (subs.length === 0) {
-    grids.push({ left: 10, right: 10, top: MAIN_TOP, bottom: 40 })
+    grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: MAIN_TOP, bottom: 40 })
   } else {
-    grids.push({ left: 10, right: 10, top: MAIN_TOP, height: MAIN_HEIGHT })
+    grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: MAIN_TOP, height: MAIN_HEIGHT })
   }
 
   xAxes.push({
@@ -207,16 +249,21 @@ function buildOption() {
     boundaryGap: true,
     axisLine: { lineStyle: { color: '#30363d' } },
     axisTick: { show: false },
-    axisLabel: { color: '#7d8590', fontSize: 10, interval: 'auto' as const, show: subs.length === 0, formatter: formatAxisDateLabel },
+    axisLabel: { color: '#7d8590', fontSize: 10, interval: 0, show: subs.length === 0, formatter: adaptiveTimeAxisFormatter },
     splitLine: { show: false },
   })
   yAxes.push({
     scale: true,
     gridIndex: 0,
-    axisLine: { show: false },
+    position: 'left',
+    axisLine: { show: true, lineStyle: { color: '#30363d' } },
     axisTick: { show: false },
     splitLine: { lineStyle: { color: 'rgba(33,38,45,0.35)', type: 'dashed' } },
-    axisLabel: { color: '#7d8590', fontSize: 10 },
+    axisLabel: {
+      color: '#7d8590', fontSize: 10, margin: 8,
+      showMinLabel: false, hideOverlap: true,
+      formatter: (v: number) => Number(v).toFixed(2),
+    },
     axisPointer: { label: { show: true, color: '#e6edf3', backgroundColor: '#30363d' } },
   })
 
@@ -225,7 +272,7 @@ function buildOption() {
     const key = subs[i]
     const gridIndex = i + 1
     const h = SUB_PANEL_HEIGHT[key]
-    grids.push({ left: 10, right: 10, top: subTop, height: h })
+    grids.push({ left: GRID_LEFT, right: GRID_RIGHT, top: subTop, height: h })
     subTop += h + SUB_GAP
 
     const isLastSub = i === subs.length - 1
@@ -236,7 +283,7 @@ function buildOption() {
       boundaryGap: true,
       axisLine: { lineStyle: { color: '#30363d' } },
       axisTick: { show: false },
-      axisLabel: { show: isLastSub, color: '#7d8590', fontSize: 9, interval: 'auto' as const },
+      axisLabel: { show: isLastSub, color: '#7d8590', fontSize: 9, interval: 0, formatter: adaptiveTimeAxisFormatter },
       splitLine: { show: false },
     })
 
@@ -250,6 +297,8 @@ function buildOption() {
         axisLabel: {
           color: '#7d8590',
           fontSize: 9,
+          showMaxLabel: false,
+          hideOverlap: true,
           formatter: (v: number) => {
             if (v >= 1e8) return `${(v / 1e8).toFixed(1)}亿`
             if (v >= 1e4) return `${(v / 1e4).toFixed(0)}万`
@@ -273,20 +322,29 @@ function buildOption() {
       const macd = indData.macd
       if (!macd) continue
       const { dif, dea } = macd
-      const bar = dif.map((v, idx) => (v - dea[idx]) * 2)
+      const bar = calcMACDHistogram(dif, dea)
       yAxes.push({
         scale: true,
         gridIndex,
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { lineStyle: { color: '#21262d', type: 'dashed' } },
-        axisLabel: { color: '#7d8590', fontSize: 9 },
+        axisLabel: { color: '#7d8590', fontSize: 9, showMaxLabel: false, hideOverlap: true },
       })
       seriesList.push(
         { name: 'DIF', type: 'line', xAxisIndex: gridIndex, yAxisIndex: gridIndex, data: dif, lineStyle: { color: '#58a6ff', width: 1 }, showSymbol: false },
         { name: 'DEA', type: 'line', xAxisIndex: gridIndex, yAxisIndex: gridIndex, data: dea, lineStyle: { color: '#d29922', width: 1 }, showSymbol: false },
-        { name: 'MACD', type: 'bar', xAxisIndex: gridIndex, yAxisIndex: gridIndex, data: bar.map(v => (v >= 0 ? v : 0)), itemStyle: { color: COLOR_UP }, barMaxWidth: 4 },
-        { name: 'MACDneg', type: 'bar', xAxisIndex: gridIndex, yAxisIndex: gridIndex, data: bar.map(v => (v < 0 ? Math.abs(v) : 0)), itemStyle: { color: COLOR_DOWN }, barMaxWidth: 4 },
+        {
+          name: 'MACD',
+          type: 'bar',
+          xAxisIndex: gridIndex,
+          yAxisIndex: gridIndex,
+          data: bar.map(value => ({
+            value,
+            itemStyle: { color: value >= 0 ? COLOR_UP : COLOR_DOWN },
+          })),
+          barMaxWidth: 4,
+        },
       )
     } else if (key === 'rsi') {
       const rsi = indData.rsi
@@ -299,7 +357,7 @@ function buildOption() {
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { lineStyle: { color: '#21262d', type: 'dashed' } },
-        axisLabel: { color: '#7d8590', fontSize: 9 },
+        axisLabel: { color: '#7d8590', fontSize: 9, showMaxLabel: false, hideOverlap: true },
       })
       seriesList.push({
         name: 'RSI',
@@ -332,7 +390,7 @@ function buildOption() {
         axisLine: { show: false },
         axisTick: { show: false },
         splitLine: { lineStyle: { color: '#21262d', type: 'dashed' } },
-        axisLabel: { color: '#7d8590', fontSize: 9 },
+        axisLabel: { color: '#7d8590', fontSize: 9, showMaxLabel: false, hideOverlap: true },
       })
       seriesList.push(
         {
@@ -370,6 +428,7 @@ function buildOption() {
   }
 
   const xAxisIndexes = grids.map((_, idx) => idx)
+  for (const axis of yAxes) axis.position = 'left'
 
   return {
     animation: false,
@@ -391,6 +450,8 @@ function buildOption() {
         end: 100,
         height: SLIDER_HEIGHT,
         bottom: SLIDER_BOTTOM,
+        left: GRID_LEFT,
+        right: GRID_RIGHT,
         borderColor: '#30363d',
         fillerColor: 'rgba(88,166,255,0.1)',
         handleStyle: { color: '#58a6ff' },
@@ -398,10 +459,16 @@ function buildOption() {
       },
     ],
     series: seriesList,
+    axisPointer: {
+      // 所有副图共享同一根时间指针：主图定位后，成交量/MACD/RSI/SKDJ 同步显示。
+      link: [{ xAxisIndex: 'all' }],
+      lineStyle: { color: '#484f58', type: 'dashed', width: 1 },
+      label: { show: false },
+    },
     tooltip: {
       trigger: 'axis', axisPointer: {
         type: 'cross',
-        lineStyle: { color: '#484f58' },
+        lineStyle: { color: '#484f58', type: 'dashed', width: 1 },
         label: {
           show: true, backgroundColor: '#30363d', color: '#e6edf3',
           formatter: (p: { axisDimension?: string; value?: unknown }) => {
@@ -527,10 +594,12 @@ function queueChanlunGraphic() {
 }
 
 function onChartFinished() {
+  queueAdaptiveTimeAxis()
   queueChanlunGraphic()
 }
 
 function onChartDataZoom() {
+  queueAdaptiveTimeAxis()
   queueChanlunGraphic()
 }
 
@@ -601,6 +670,7 @@ function syncChanlunOverlayCache() {
     dates,
     seriesKlines,
     bis: props.bis,
+    biZhongshus: props.biZhongshus,
     xiangs: props.xiangs,
     zhongshus: props.zhongshus,
     signals: props.signals,
@@ -608,6 +678,7 @@ function syncChanlunOverlayCache() {
     supportResistance: props.supportResistance,
     flags: {
       bis: ind.bis,
+      biZhongshus: ind.biZhongshus,
       xiangs: ind.xiangs,
       zhongshus: ind.zhongshus,
       signals: ind.signals,
@@ -643,6 +714,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  cancelAnimationFrame(timeAxisRaf)
+  timeAxisRaf = 0
   cancelAnimationFrame(graphicRaf)
   graphicRaf = 0
   if (chart) {
@@ -676,7 +749,7 @@ watch(
 )
 
 watch(
-  () => [props.bis, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
+  () => [props.bis, props.biZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
   updateOverlayOnly,
   { deep: true }
 )
@@ -685,6 +758,7 @@ watch(
 watch(
   () => [
     props.indicators?.bis,
+    props.indicators?.biZhongshus,
     props.indicators?.xiangs,
     props.indicators?.zhongshus,
     props.indicators?.signals,

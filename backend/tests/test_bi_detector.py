@@ -64,6 +64,78 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
             self.assertEqual(previous.end, current.start)
             self.assertAlmostEqual(previous.end_price, current.start_price)
 
+    def test_virtual_tail_connects_to_last_confirmed_bi_without_becoming_confirmed(self):
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(10)],
+            "open": [10.0] * 10,
+            "high": [11.0] * 10,
+            "low": [9.0] * 10,
+            "close": [10.0] * 10,
+            "volume": [100.0] * 10,
+        })
+        detector = BiDetector(frame)
+        detector._fenxing_detector.klines = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(10)],
+            "open": [10.0] * 10,
+            "high": [10.0, 9.0, 10.0, 12.0, 14.0, 15.0, 14.0, 13.0, 12.0, 11.0],
+            "low": [9.0, 8.0, 9.0, 10.0, 12.0, 13.0, 12.0, 10.0, 9.0, 7.0],
+            "close": [10.0] * 10,
+            "volume": [100.0] * 10,
+        })
+        detector._fenxing_detector.detect = Mock(return_value=[
+            Fenxing(date=t0 + timedelta(days=1), type="bottom", high=9.0, low=8.0, index=1),
+            Fenxing(date=t0 + timedelta(days=5), type="top", high=15.0, low=13.0, index=5),
+        ])
+
+        bis = detector.detect(min_bars=5, include_virtual=True)
+
+        self.assertEqual(len(bis), 2)
+        confirmed, virtual = bis
+        self.assertTrue(confirmed.confirmed)
+        self.assertFalse(virtual.confirmed)
+        self.assertEqual(confirmed.end, virtual.start)
+        self.assertAlmostEqual(confirmed.end_price, virtual.start_price)
+        self.assertEqual(virtual.direction, "down")
+        self.assertEqual(virtual.end, t0 + timedelta(days=9))
+        self.assertAlmostEqual(virtual.end_price, 7.0)
+
+    def test_virtual_tail_keeps_rejected_fractal_and_reaches_latest_extreme(self):
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(12)],
+            "open": [10.0] * 12,
+            "high": [11.0] * 12,
+            "low": [9.0] * 12,
+            "close": [10.0] * 12,
+            "volume": [100.0] * 12,
+        })
+        detector = BiDetector(frame)
+        detector._fenxing_detector.klines = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(12)],
+            "open": [10.0] * 12,
+            "high": [10, 9, 10, 12, 14, 15, 14, 13, 14, 16, 17, 18],
+            "low": [9, 8, 9, 10, 12, 13, 12, 10, 11, 13, 15, 16],
+            "close": [10.0] * 12,
+            "volume": [100.0] * 12,
+        })
+        detector._fenxing_detector.detect = Mock(return_value=[
+            Fenxing(date=t0 + timedelta(days=1), type="bottom", high=9.0, low=8.0, index=1),
+            Fenxing(date=t0 + timedelta(days=5), type="top", high=15.0, low=13.0, index=5),
+            # 与前一端点仅隔2根，不能确认成笔，但要作为虚线候选路径保留。
+            Fenxing(date=t0 + timedelta(days=7), type="bottom", high=13.0, low=10.0, index=7),
+        ])
+
+        bis = detector.detect(min_bars=5, include_virtual=True)
+
+        self.assertEqual([bi.confirmed for bi in bis], [True, False, False])
+        self.assertEqual([bi.direction for bi in bis], ["up", "down", "up"])
+        for previous, current in zip(bis, bis[1:]):
+            self.assertEqual(previous.end, current.start)
+            self.assertAlmostEqual(previous.end_price, current.start_price)
+        self.assertEqual(bis[-1].end, t0 + timedelta(days=11))
+        self.assertAlmostEqual(bis[-1].end_price, 18.0)
+
 
 if __name__ == "__main__":
     unittest.main()

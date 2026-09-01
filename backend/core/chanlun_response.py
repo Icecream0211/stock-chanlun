@@ -42,6 +42,7 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
                 "low": b.low,
                 "start_price": b.start_price,
                 "end_price": b.end_price,
+                "confirmed": b.confirmed,
             }
             for b in result.bis
         ],

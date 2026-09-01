@@ -24,6 +24,7 @@ class Bi(BaseModel):
     low: float
     start_price: float  # 笔起点价格
     end_price: float   # 笔终点价格
+    confirmed: bool = True  # False 表示随最新 K 线延伸、尚未满足成笔条件的虚拟尾笔
 
 
 class XiangSegment(BaseModel):

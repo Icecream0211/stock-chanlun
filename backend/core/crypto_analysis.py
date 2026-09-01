@@ -71,6 +71,7 @@ def serialize_crypto_analysis(result: ChanlunAnalysis) -> dict:
                 "low": b.low,
                 "start_price": b.start_price,
                 "end_price": b.end_price,
+                "confirmed": b.confirmed,
             }
             for b in result.bis
         ],
@@ -81,8 +82,20 @@ def serialize_crypto_analysis(result: ChanlunAnalysis) -> dict:
                 "end": str(z.end)[:19],
                 "range_high": z.range_high,
                 "range_low": z.range_low,
+                "source_type": z.source_type,
             }
             for z in result.zhongshus
+        ],
+        "bi_zhongshus": [
+            {
+                "id": z.id,
+                "start": str(z.start)[:19],
+                "end": str(z.end)[:19],
+                "range_high": z.range_high,
+                "range_low": z.range_low,
+                "source_type": z.source_type,
+            }
+            for z in result.bi_zhongshus
         ],
         "signals": [
             {

@@ -7,6 +7,7 @@ import {
   DataZoomComponent,
   GraphicComponent,
   GridComponent,
+  LegendComponent,
   TooltipComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
@@ -16,6 +17,7 @@ echarts.use([
   CandlestickChart,
   LineChart,
   GridComponent,
+  LegendComponent,
   TooltipComponent,
   DataZoomComponent,
   GraphicComponent,

@@ -22,9 +22,7 @@ from utils import market_overview_cache, sector_board_cache, stock_news_cache
 from services.akshare_service import (
     get_board_constituents_em,
     get_daily_hot_stocks,
-    get_kline_hist,
     get_market_overview_bundle,
-    get_realtime_quote,
     get_stock_boards_em,
     get_stock_depth_em,
     get_stock_info,
@@ -33,6 +31,7 @@ from services.akshare_service import (
     normalize_stock_code,
     search_stocks,
 )
+from services.market_data_service import get_kline_hist, get_realtime_quote
 
 router = APIRouter()
 

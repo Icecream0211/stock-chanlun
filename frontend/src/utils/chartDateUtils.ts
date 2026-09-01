@@ -24,6 +24,101 @@ export function formatAxisDateLabel(s: string): string {
   return key.length > 10 ? key.slice(5, 16) : key.slice(5, 10)
 }
 
+export type AdaptiveTimeAxisMode = 'year' | 'month' | 'day' | 'time'
+
+export function percentToVisibleIndexRange(
+  length: number,
+  start = 0,
+  end = 100,
+): [number, number] {
+  if (length <= 0) return [0, 0]
+  const maxIndex = length - 1
+  const safeStart = Math.max(0, Math.min(100, start))
+  const safeEnd = Math.max(safeStart, Math.min(100, end))
+  return [
+    Math.max(0, Math.min(maxIndex, Math.floor(maxIndex * safeStart / 100))),
+    Math.max(0, Math.min(maxIndex, Math.ceil(maxIndex * safeEnd / 100))),
+  ]
+}
+
+/** 根据当前可视时间跨度选择年、月、日或时分标签。 */
+export function resolveAdaptiveTimeAxisMode(
+  dates: string[],
+  visibleStart = 0,
+  visibleEnd = dates.length - 1,
+): AdaptiveTimeAxisMode {
+  if (!dates.length) return 'day'
+  const start = Math.max(0, Math.min(dates.length - 1, visibleStart))
+  const end = Math.max(start, Math.min(dates.length - 1, visibleEnd))
+  const startTime = parseTime(dates[start])
+  const endTime = parseTime(dates[end])
+  const spanDays = Number.isFinite(startTime) && Number.isFinite(endTime)
+    ? Math.abs(endTime - startTime) / 86_400_000
+    : 0
+
+  // 默认行情窗口约为 1 年，按 10 个月以上视作年度总览，避免完整窗口仍挤满月份。
+  if (spanDays >= 300) return 'year'
+  if (spanDays >= 62) return 'month'
+  if (spanDays >= 2) return 'day'
+  return dates.slice(start, end + 1).some(date => normDateTime(date).length > 10) ? 'time' : 'day'
+}
+
+/**
+ * ECharts category 轴 formatter。年/月模式只在周期切换处显示标签，避免缩放后
+ * 同一年或同一月被重复标注；分钟模式在跨日的第一根 K 线上补日期。
+ */
+export function formatAdaptiveTimeAxisLabel(
+  value: string,
+  index: number,
+  dates: string[],
+  visibleStart = 0,
+  visibleEnd = dates.length - 1,
+  maxLabels = 10,
+): string {
+  const key = normDateTime(value)
+  if (!key) return ''
+  const mode = resolveAdaptiveTimeAxisMode(dates, visibleStart, visibleEnd)
+  // ECharts 在 dataZoom 后传入的 index 可能是“当前可视刻度序号”，而不是完整
+  // category 数据索引，因此必须用轴值反查真实位置再判断周期边界。
+  const matchedIndex = dates.findIndex(date => normDateTime(date) === key)
+  const dataIndex = matchedIndex >= 0 ? matchedIndex : index
+  const previous = dataIndex > visibleStart ? normDateTime(dates[dataIndex - 1] ?? '') : ''
+  const day = key.slice(0, 10)
+  const previousDay = previous.slice(0, 10)
+  const visibleCount = Math.max(1, visibleEnd - visibleStart + 1)
+  const safeMaxLabels = Math.max(2, maxLabels)
+
+  if (mode === 'year') {
+    const year = key.slice(0, 4)
+    if (dataIndex > visibleStart && previous.slice(0, 4) === year) return ''
+    const startYear = Number(normDateTime(dates[visibleStart] ?? key).slice(0, 4))
+    const endYear = Number(normDateTime(dates[visibleEnd] ?? key).slice(0, 4))
+    const step = Math.max(1, Math.ceil((endYear - startYear + 1) / safeMaxLabels))
+    return dataIndex <= visibleStart || (Number(year) - startYear) % step === 0 ? year : ''
+  }
+  if (mode === 'month') {
+    const month = key.slice(0, 7)
+    if (dataIndex > visibleStart && previous.slice(0, 7) === month) return ''
+    const startKey = normDateTime(dates[visibleStart] ?? key)
+    const endKey = normDateTime(dates[visibleEnd] ?? key)
+    const startMonth = Number(startKey.slice(0, 4)) * 12 + Number(startKey.slice(5, 7)) - 1
+    const endMonth = Number(endKey.slice(0, 4)) * 12 + Number(endKey.slice(5, 7)) - 1
+    const currentMonth = Number(key.slice(0, 4)) * 12 + Number(key.slice(5, 7)) - 1
+    const step = Math.max(1, Math.ceil((endMonth - startMonth + 1) / safeMaxLabels))
+    if (dataIndex > visibleStart && (currentMonth - startMonth) % step !== 0) return ''
+    return dataIndex <= visibleStart || previous.slice(0, 4) !== key.slice(0, 4) ? month : `${key.slice(5, 7)}月`
+  }
+  if (mode === 'day') {
+    const step = Math.max(1, Math.ceil(visibleCount / safeMaxLabels))
+    return dataIndex <= visibleStart || (dataIndex - visibleStart) % step === 0 ? day.slice(5, 10) : ''
+  }
+  const step = Math.max(1, Math.ceil(visibleCount / safeMaxLabels))
+  if (dataIndex > visibleStart && (dataIndex - visibleStart) % step !== 0) return ''
+  if (key.length <= 10) return key.slice(5, 10)
+  const time = key.slice(11, 16)
+  return dataIndex <= visibleStart || previousDay !== day ? `${day.slice(5, 10)}\n${time}` : time
+}
+
 export function buildDateLookup(dates: string[]): Map<string, number> {
   const lookup = new Map<string, number>()
   const dayCounts = new Map<string, number>()

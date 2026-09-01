@@ -12,6 +12,7 @@ export interface IndicatorConfig {
   ma20: boolean
   ma60: boolean
   bis: boolean
+  biZhongshus: boolean
   xiangs: boolean
   zhongshus: boolean
   signals: boolean
@@ -29,25 +30,36 @@ export const defaultIndicators: IndicatorConfig = {
   ma20: true,
   ma60: true,
   bis: true,
-  /** 默认关闭线段，避免与「笔」叠两层折线导致杂乱；需要时在指标面板打开 */
-  xiangs: false,
+  biZhongshus: true,
+  /** 四类缠论结构默认展示，用户可在指标面板逐项关闭。 */
+  xiangs: true,
   zhongshus: true,
   signals: true,
-  aiLines: true,
-  supportResistance: true,
+  aiLines: false,
+  supportResistance: false,
   volume: true,
   macd: true,
   rsi: false,
   skdj: false,
 }
 
-const INDICATOR_KEY = 'chanstock_indicators_v1'
+const INDICATOR_KEY = 'chanstock_indicators_v2'
+const LEGACY_INDICATOR_KEY = 'chanstock_indicators_v1'
 
 function loadIndicators(): IndicatorConfig {
   try {
     const raw = localStorage.getItem(INDICATOR_KEY)
-    if (!raw) return { ...defaultIndicators }
-    return { ...defaultIndicators, ...JSON.parse(raw) as Partial<IndicatorConfig> }
+    if (raw) return { ...defaultIndicators, ...JSON.parse(raw) as Partial<IndicatorConfig> }
+
+    // v1 中辅助横线曾默认展示。迁移时保留其余偏好，但明确关闭两类易造成拥挤的横线。
+    const legacyRaw = localStorage.getItem(LEGACY_INDICATOR_KEY)
+    if (!legacyRaw) return { ...defaultIndicators }
+    return {
+      ...defaultIndicators,
+      ...JSON.parse(legacyRaw) as Partial<IndicatorConfig>,
+      aiLines: false,
+      supportResistance: false,
+    }
   } catch { return { ...defaultIndicators } }
 }
 

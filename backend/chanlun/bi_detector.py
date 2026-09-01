@@ -56,10 +56,12 @@ class BiDetector:
 
         return out
 
-    def detect(self, min_bars: int = 5) -> list[Bi]:
+    def detect(self, min_bars: int = 5, include_virtual: bool = False) -> list[Bi]:
         """
         检测所有笔
         min_bars: 笔最少K线数（默认5根，按【包含处理后】序列计数）
+        include_virtual: 是否在确认笔末尾附加一条未确认虚拟笔，供图表展示当前走势。
+          虚拟笔不改变严格成笔条件，调用方不得用它计算中枢、买卖点或趋势。
 
         --- claudecode 2026-08-31 重写，修复两个结构性缺陷 ---
 
@@ -118,7 +120,66 @@ class BiDetector:
                     high=float(a.high), low=float(b.low),
                     start_price=float(a.high), end_price=float(b.low),
                 ))
+        if include_virtual and seq:
+            bis.extend(self._build_virtual_tail(seq[-1], len(bis) + 1))
         return bis
+
+    def _build_virtual_tail(self, start: Fenxing, number: int) -> list[Bi]:
+        """
+        从最后一个确认分型连接候选分型及最新价格极值，形成绘图用虚拟尾部。
+
+        尾部尚未出现满足最小间隔的反向分型时，不应强行确认一笔；但完全不画会
+        造成用户看到的“断尾”。这里保留未达成笔间隔的候选分型路径，并连接到
+        当前方向的最新极值。所有路径均标记 confirmed=False，会随行情重算，并在
+        下一次确认分型出现后被正式笔替换。
+        """
+        processed = self.processed_klines
+        endpoints = [start]
+        endpoints.extend(fx for fx in self._fenxings if fx.index > start.index)
+        last = endpoints[-1]
+
+        # 最后一根 K 线本身无法成为三 K 分型；追加最后候选端点到实时极值的路径。
+        tail = processed.iloc[last.index + 1:]
+        if not tail.empty:
+            if last.type == "bottom":
+                idx = int(tail["high"].astype(float).idxmax())
+                row = processed.loc[idx]
+                price = float(row["high"])
+                if price > float(last.low):
+                    endpoints.append(Fenxing(
+                        date=row["date"], type="top", high=price,
+                        low=float(row["low"]), index=idx,
+                    ))
+            else:
+                idx = int(tail["low"].astype(float).idxmin())
+                row = processed.loc[idx]
+                price = float(row["low"])
+                if price < float(last.high):
+                    endpoints.append(Fenxing(
+                        date=row["date"], type="bottom", high=float(row["high"]),
+                        low=price, index=idx,
+                    ))
+
+        virtual_bis: list[Bi] = []
+        for a, b in zip(endpoints, endpoints[1:]):
+            start_price = float(a.low if a.type == "bottom" else a.high)
+            end_price = float(b.high if b.type == "top" else b.low)
+            direction = "up" if a.type == "bottom" else "down"
+            end_date = b.date
+            if hasattr(end_date, "to_pydatetime"):
+                end_date = end_date.to_pydatetime()
+            virtual_bis.append(Bi(
+                id=f"bi_virtual_{number + len(virtual_bis)}",
+                start=a.date,
+                end=end_date,
+                direction=direction,
+                high=max(start_price, end_price),
+                low=min(start_price, end_price),
+                start_price=start_price,
+                end_price=end_price,
+                confirmed=False,
+            ))
+        return virtual_bis
 
     def _count_klines_between(self, start: datetime, end: datetime) -> int:
         """计算两个时间之间的K线数量（searchsorted，避免全表布尔掩码）"""

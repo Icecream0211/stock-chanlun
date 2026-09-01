@@ -19,6 +19,12 @@ def _truthy(name: str, default: bool = False) -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def _csv_values(name: str, default: str) -> tuple[str, ...]:
+    raw = os.environ.get(name, default)
+    values = tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+    return values or tuple(part.strip().lower() for part in default.split(",") if part.strip())
+
+
 # Comma-separated origins, or "*" for any origin (browser credentials disabled)
 CORS_ORIGINS_RAW: str = os.environ.get("CORS_ORIGINS", "*").strip()
 
@@ -42,6 +48,23 @@ CUSTOM_LLM_MODEL_ID: str = os.environ.get("CUSTOM_LLM_MODEL_ID", "").strip() or 
 
 # 选股缠论并发（默认 12，可通过环境变量调低以减轻行情源压力）
 SCREENING_WORKERS: int = max(1, min(32, int(os.environ.get("SCREENING_WORKERS", "12") or "12")))
+
+# A 股行情源优先级。ifind 不可用时自动继续下一个源；legacy 为腾讯/新浪现有实现。
+MARKET_DATA_SOURCES: tuple[str, ...] = _csv_values("MARKET_DATA_SOURCES", "ifind,legacy")
+
+# 同花顺 iFinD（可选）：支持 HTTP token 或 SDK 账号密码，也可用 IFIND_ENABLED 显式控制。
+IFIND_USERNAME: str = os.environ.get("IFIND_USERNAME", "").strip()
+IFIND_PASSWORD: str = os.environ.get("IFIND_PASSWORD", "").strip()
+IFIND_REFRESH_TOKEN: str = os.environ.get("IFIND_REFRESH_TOKEN", "").strip()
+IFIND_ACCESS_TOKEN: str = os.environ.get("IFIND_ACCESS_TOKEN", "").strip()
+IFIND_ENABLED: bool = _truthy(
+    "IFIND_ENABLED",
+    default=bool(
+        (IFIND_USERNAME and IFIND_PASSWORD)
+        or IFIND_REFRESH_TOKEN
+        or IFIND_ACCESS_TOKEN
+    ),
+)
 
 # 后端默认监听端口（run_server.py 与 python main.py 均读取）
 PORT: int = max(1, min(65535, int(os.environ.get("PORT", "8010") or "8010")))

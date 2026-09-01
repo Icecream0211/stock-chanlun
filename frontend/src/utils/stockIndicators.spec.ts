@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { calcMACD, calcSKDJ } from './stockIndicators'
+import { calcMACD, calcMACDHistogram, calcSKDJ } from './stockIndicators'
 
 describe('stockIndicators', () => {
   it('calcMACD returns aligned dif/dea arrays', () => {
@@ -9,6 +9,14 @@ describe('stockIndicators', () => {
     expect(dea.length).toBe(closes.length)
     expect(dif.at(-1)).not.toBeNaN()
     expect(dea.at(-1)).not.toBeNaN()
+  })
+
+  it('calcMACDHistogram preserves negative bars below zero', () => {
+    const bars = calcMACDHistogram([1, -1, 0.2], [0.5, -0.5, 0.4])
+    expect(bars).toEqual([1, -1, -0.4])
+    expect(bars[0]).toBeGreaterThan(0)
+    expect(bars[1]).toBeLessThan(0)
+    expect(bars[2]).toBeLessThan(0)
   })
 
   it('calcSKDJ produces values after warmup window', () => {

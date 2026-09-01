@@ -83,6 +83,34 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertEqual(first.end, second.start)
         self.assertAlmostEqual(first.end_price, second.start_price)
 
+    def test_detect_segments_keeps_short_tail_connected_as_unconfirmed(self):
+        # 前3笔确认上线段，余下仅2笔尚不足3笔线段；绘图仍应从同一端点接出虚线尾段。
+        bis = self._bis_from_points([9.0, 11.0, 10.0, 13.0, 9.0, 12.0])
+
+        segments = SegmentDetector(bis).detect_segments()
+
+        self.assertEqual(len(segments), 2)
+        confirmed, pending = segments
+        self.assertTrue(confirmed.confirmed)
+        self.assertFalse(pending.confirmed)
+        self.assertEqual(pending.bi_ids, ["bi_4", "bi_5"])
+        self.assertEqual(confirmed.end, pending.start)
+        self.assertAlmostEqual(confirmed.end_price, pending.start_price)
+
+    def test_detect_segments_keeps_residual_after_unconfirmed_tail_connected(self):
+        # 未确认尾段按同向终点收在第3笔，剩余1笔继续作为下一条候选尾段显示。
+        bis = self._bis_from_points([9.0, 11.0, 10.0, 13.0, 9.0, 12.0, 8.0, 14.0])
+
+        segments = SegmentDetector(bis).detect_segments()
+
+        self.assertEqual(len(segments), 3)
+        self.assertTrue(segments[0].confirmed)
+        self.assertFalse(segments[1].confirmed)
+        self.assertFalse(segments[2].confirmed)
+        self.assertEqual(segments[2].bi_ids, ["bi_7"])
+        self.assertEqual(segments[1].end, segments[2].start)
+        self.assertAlmostEqual(segments[1].end_price, segments[2].start_price)
+
     def test_detect_segments_rejects_disconnected_bis(self):
         bis = self._bis_from_points([9.0, 11.0, 10.0, 13.0])
         bis[1] = bis[1].model_copy(update={"start": bis[1].start + timedelta(minutes=1)})

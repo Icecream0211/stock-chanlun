@@ -43,18 +43,21 @@ class ChanlunEngine:
         """执行完整缠论分析"""
         # 笔检测器内部已完成分型识别与包含处理，无需单独跑一遍分型
         bi_detector = BiDetector(self.raw_klines)
-        bis = bi_detector.detect(min_bars=5)
+        bis = bi_detector.detect(min_bars=5, include_virtual=True)
+        confirmed_bis = [bi for bi in bis if bi.confirmed]
 
         # 3. 线段识别
         seg_detector = SegmentDetector(bis)
         segments = seg_detector.detect_segments(min_overlap_bis=3)
+        confirmed_segments = [segment for segment in segments if segment.confirmed]
 
-        # 4. 中枢识别：笔中枢与线段中枢分别计算，不能混成同一种图形
-        bi_zhongshus = seg_detector.detect_bi_zhongshus()
-        zhongshus = seg_detector.detect_zhongshus(segments)
+        # 4. 中枢识别：虚拟尾笔/尾段只用于画图，不能参与结构确认。
+        confirmed_seg_detector = SegmentDetector(confirmed_bis)
+        bi_zhongshus = confirmed_seg_detector.detect_bi_zhongshus()
+        zhongshus = confirmed_seg_detector.detect_zhongshus(confirmed_segments)
 
         # 5. 买卖点判定
-        sig_detector = SignalDetector(bis, segments, zhongshus, level=level)
+        sig_detector = SignalDetector(confirmed_bis, confirmed_segments, zhongshus, level=level)
         signals = sig_detector.detect_all()
         trend = sig_detector.detect_trend()
 

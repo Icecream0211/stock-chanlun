@@ -134,6 +134,7 @@ export interface Bi {
   low: number
   start_price?: number
   end_price?: number
+  confirmed?: boolean
 }
 
 export interface XiangSegment {
@@ -155,6 +156,7 @@ export interface Zhongshu {
   range_high: number
   range_low: number
   confirmed?: boolean
+  source_type?: 'bi' | 'segment'
 }
 
 export interface Signal {
@@ -337,6 +339,7 @@ export interface ChanlunResult {
   total?: number
   bis: Bi[]
   xiangs: XiangSegment[]
+  bi_zhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   supportResistance: SupportResistance[]

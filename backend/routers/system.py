@@ -7,6 +7,7 @@ from config import SCREENING_WORKERS
 from stores.local_json import load_settings, save_settings
 from ai.chat_sessions import chat_session_stats
 from services.akshare_service import akshare_cache_stats
+from services.market_data_service import market_data_status
 from utils import (
     ai_signal_llm_cache,
     ai_signal_rule_cache,
@@ -57,6 +58,7 @@ def health_check():
         },
         "chat_sessions": chat_session_stats(),
         "screening_workers": SCREENING_WORKERS,
+        "market_data": market_data_status(),
     }
 
 

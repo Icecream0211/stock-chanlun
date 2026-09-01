@@ -34,6 +34,11 @@ export function calcMACD(closes: number[]) {
   return { dif, dea }
 }
 
+/** MACD 柱：国内行情软件常用 2 × (DIF - DEA)，负值必须绘制在零轴下方。 */
+export function calcMACDHistogram(dif: number[], dea: number[]): number[] {
+  return dif.map((value, index) => (value - (dea[index] ?? value)) * 2)
+}
+
 /** 通达信风格 SKDJ（与 SKDJChart.vue 一致） */
 export function calcSKDJ(
   highs: number[],
