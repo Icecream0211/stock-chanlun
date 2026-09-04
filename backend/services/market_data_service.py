@@ -11,6 +11,7 @@ from services.akshare_service import (
     get_realtime_quote as get_legacy_realtime_quote,
 )
 from services.ifind_service import get_ifind_kline, get_ifind_realtime_quote, ifind_status
+from services.ifind_mcp_service import status as ifind_mcp_status
 
 log = logging.getLogger(__name__)
 
@@ -123,5 +124,6 @@ def market_data_status() -> dict:
             source for source in _sources() if source != "ifind" or config.IFIND_ENABLED
         ],
         "ifind": ifind_status(),
+        "ifind_mcp_fallback": ifind_mcp_status(),
         "legacy": {"enabled": "legacy" in _sources(), "providers": ["tencent", "sina"]},
     }

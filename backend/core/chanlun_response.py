@@ -5,6 +5,30 @@ from chanlun.elements import ChanlunAnalysis
 from core.chanlun_analysis import level_to_period
 
 
+def _serialize_zhongshu(z) -> dict:
+    return {
+        "id": z.id,
+        "start": str(z.start)[:19],
+        "end": str(z.end)[:19],
+        "range_high": z.range_high,
+        "range_low": z.range_low,
+        "zg": z.zg if z.zg is not None else z.range_high,
+        "zd": z.zd if z.zd is not None else z.range_low,
+        "gg": z.gg if z.gg is not None else z.range_high,
+        "dd": z.dd if z.dd is not None else z.range_low,
+        "level": z.level,
+        "confirmed": z.confirmed,
+        "source_type": z.source_type,
+        "status": z.status,
+        "structure_count": z.structure_count,
+        "extension_count": z.extension_count,
+        "exit_direction": z.exit_direction,
+        "expansion_type": z.expansion_type,
+        "parent_id": z.parent_id,
+        "child_ids": z.child_ids,
+    }
+
+
 def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
     """将 ChanlunAnalysis 转为前端 JSON（含 K 线，减少单独 /kline 请求）。"""
     klines = [
@@ -32,6 +56,20 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
         "summary": result.summary,
         "klines": klines,
         "total": len(klines),
+        "inclusions": [
+            {
+                "start": str(item.start)[:19],
+                "end": str(item.end)[:19],
+                "merged_date": str(item.merged_date)[:19],
+                "direction": item.direction,
+                "count": item.count,
+                "high": item.high,
+                "low": item.low,
+                "high_date": str(item.high_date)[:19],
+                "low_date": str(item.low_date)[:19],
+            }
+            for item in result.inclusions
+        ],
         "bis": [
             {
                 "id": b.id,
@@ -43,6 +81,7 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
                 "start_price": b.start_price,
                 "end_price": b.end_price,
                 "confirmed": b.confirmed,
+                "rule": b.rule,
             }
             for b in result.bis
         ],
@@ -60,30 +99,8 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
             }
             for s in result.xiangs
         ],
-        "zhongshus": [
-            {
-                "id": z.id,
-                "start": str(z.start)[:19],
-                "end": str(z.end)[:19],
-                "range_high": z.range_high,
-                "range_low": z.range_low,
-                "confirmed": z.confirmed,
-                "source_type": z.source_type,
-            }
-            for z in result.zhongshus
-        ],
-        "bi_zhongshus": [
-            {
-                "id": z.id,
-                "start": str(z.start)[:19],
-                "end": str(z.end)[:19],
-                "range_high": z.range_high,
-                "range_low": z.range_low,
-                "confirmed": z.confirmed,
-                "source_type": z.source_type,
-            }
-            for z in result.bi_zhongshus
-        ],
+        "zhongshus": [_serialize_zhongshu(z) for z in result.zhongshus],
+        "bi_zhongshus": [_serialize_zhongshu(z) for z in result.bi_zhongshus],
         "signals": [
             {
                 "type": s.type,

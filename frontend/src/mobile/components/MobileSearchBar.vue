@@ -56,8 +56,8 @@
             :key="s.code"
             class="search-result-item"
             :style="{ height: SEARCH_ROW_H + 'px' }"
-            v-bind="stockLinkPrefetchHandlers(s.code)"
-            @click="select(s.code)"
+            v-bind="stockLinkPrefetchHandlers(s.instrument_id || s.code)"
+            @click="select(s.instrument_id || s.code)"
           >
             <span class="sri-code mono">{{ s.code }}</span>
             <span class="sri-name">{{ s.name }}</span>
@@ -72,8 +72,8 @@
           v-for="s in searchDisplay"
           :key="s.code"
           class="search-result-item"
-          v-bind="stockLinkPrefetchHandlers(s.code)"
-          @click="select(s.code)"
+          v-bind="stockLinkPrefetchHandlers(s.instrument_id || s.code)"
+          @click="select(s.instrument_id || s.code)"
         >
           <span class="sri-code mono">{{ s.code }}</span>
           <span class="sri-name">{{ s.name }}</span>

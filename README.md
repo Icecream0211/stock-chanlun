@@ -810,7 +810,10 @@ GET  /health                                 健康检查
 笔是连接相邻顶底分型的 K 线段：
 - **向上笔**：底分型 → 顶分型
 - **向下笔**：顶分型 → 底分型
-- **最小笔长**：默认 5 根 K 线
+- **默认新笔**：顶底分型不共用包含处理后的 K 线，两个极值之间按原始行情计至少 5 根 K 线
+- **端点约束**：端点必须是该笔区间内的最高/最低点；连续同型同价分型保留较早者
+- **兼容模式**：可通过 `CHANLUN_BI_MODE=old|simple|fractal` 切换，避免与默认新笔口径混算
+- **未完成走势**：图表末尾最多追加一根虚线候选笔，只能延伸未确认尾段，不参与线段、中枢和买卖点的确认计算
 
 ### 线段（Segment）
 
@@ -848,8 +851,14 @@ GET  /health                                 健康检查
 | `IFIND_ACCESS_TOKEN` | 否 | iFinD HTTP 接口短期 access token；配置后优先于 refresh token |
 | `IFIND_USERNAME` | 否 | iFinD 数据接口账号；SDK 方式需同时安装 `iFinDAPI` |
 | `IFIND_PASSWORD` | 否 | iFinD 数据接口密码；只从后端环境变量读取，不返回给前端 |
+| `IFIND_MCP_ENABLED` | 否 | 启用 iFinD MCP 最终兜底；需同时配置授权 token 与对应服务 URL |
+| `IFIND_MCP_AUTH_TOKEN` | 否 | iFinD MCP Authorization token，仅保存在本地 `.env` |
+| `IFIND_MCP_STOCK_URL` | 否 | iFinD 股票 MCP 地址，用于股票搜索与热门股兜底 |
+| `IFIND_MCP_NEWS_URL` | 否 | iFinD 新闻 MCP 地址，用于财经新闻兜底 |
+| `IFIND_MCP_INDEX_URL` | 否 | iFinD 指数 MCP 地址，用于主要指数与涨跌家数兜底 |
 | `PORT` | 否 | 后端监听端口，默认 `8010`（`run_server.py` 与 `python main.py` 均读取） |
 | `SCREENING_WORKERS` | 否 | 选股缠论并发线程数，默认 `12` |
+| `CHANLUN_BI_MODE` | 否 | 笔规则兼容模式：`new`（默认新笔）、`old`（旧笔）、`simple`、`fractal`；修改后需重启后端 |
 
 ### 限流说明（后端）
 

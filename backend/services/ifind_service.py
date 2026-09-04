@@ -44,8 +44,16 @@ def _plain_code(code: str) -> str:
 
 def to_ifind_code(code: str) -> str:
     """将纯代码或腾讯格式代码转换为 iFinD 代码。"""
+    raw = str(code or "").strip().upper()
+    explicit_exchange: str | None = None
+    if raw.startswith(("SH", "SZ", "BJ")):
+        explicit_exchange = raw[:2]
+    elif "." in raw and raw.rsplit(".", 1)[1] in ("SH", "SZ", "BJ"):
+        explicit_exchange = raw.rsplit(".", 1)[1]
     value = _plain_code(code)
-    if value.startswith(("60", "68", "50", "51")):
+    if explicit_exchange:
+        exchange = explicit_exchange
+    elif value.startswith(("60", "68", "50", "51")):
         exchange = "SH"
     elif value.startswith(("4", "8")):
         exchange = "BJ"
@@ -447,8 +455,9 @@ def get_ifind_realtime_quote(codes: list[str]) -> pd.DataFrame:
     global _last_error
     if not codes:
         return pd.DataFrame()
+    request_codes = [to_ifind_code(code) for code in codes]
     normalized_codes = [_plain_code(code) for code in codes]
-    cache_key = ",".join(sorted(normalized_codes))
+    cache_key = ",".join(sorted(request_codes))
     cached = _quote_cache.get(cache_key)
     if cached is not None:
         result = cached.copy()
@@ -463,7 +472,7 @@ def get_ifind_realtime_quote(codes: list[str]) -> pd.DataFrame:
             raw = _http_post(
                 "/api/v1/real_time_quotation",
                 {
-                    "codes": ",".join(to_ifind_code(code) for code in normalized_codes),
+                    "codes": ",".join(request_codes),
                     "indicators": "open,high,low,latest,latestAmount,latestVolume",
                 },
             )
@@ -472,7 +481,7 @@ def get_ifind_realtime_quote(codes: list[str]) -> pd.DataFrame:
             if query is None:
                 return pd.DataFrame()
             raw = query(
-                ",".join(to_ifind_code(code) for code in normalized_codes),
+                ",".join(request_codes),
                 "open;high;low;latest;latestAmount;latestVolume",
                 "",
             )

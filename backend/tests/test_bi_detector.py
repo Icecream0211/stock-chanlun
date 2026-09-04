@@ -39,6 +39,18 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
         self.assertEqual(compressed[1].low, 6.5)
         self.assertEqual(compressed[1].index, 5)
 
+    def test_compress_keeps_earliest_when_same_type_prices_are_equal(self):
+        t0 = datetime(2026, 1, 1)
+        fenxings = [
+            Fenxing(date=t0, type="top", high=12.0, low=10.0, index=1),
+            Fenxing(date=t0 + timedelta(days=1), type="top", high=12.0, low=11.0, index=2),
+        ]
+
+        compressed = BiDetector.compress_fenxings(fenxings)
+
+        self.assertEqual(len(compressed), 1)
+        self.assertEqual(compressed[0].index, 1)
+
     def test_detect_builds_connected_alternating_bis(self):
         t0 = datetime(2026, 1, 1)
         frame = pd.DataFrame({
@@ -50,6 +62,7 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
             "volume": [100.0] * 16,
         })
         detector = BiDetector(frame)
+        detector._fenxing_detector.klines = frame.copy()
         detector._fenxing_detector.detect = Mock(return_value=[
             Fenxing(date=t0 + timedelta(days=1), type="bottom", high=9.0, low=8.0, index=1),
             Fenxing(date=t0 + timedelta(days=5), type="top", high=13.0, low=12.0, index=5),
@@ -60,6 +73,7 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
         bis = detector.detect(min_bars=5)
 
         self.assertEqual([b.direction for b in bis], ["up", "down", "up"])
+        self.assertTrue(all(b.rule == "new" for b in bis))
         for previous, current in zip(bis, bis[1:]):
             self.assertEqual(previous.end, current.start)
             self.assertAlmostEqual(previous.end_price, current.start_price)
@@ -100,7 +114,7 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
         self.assertEqual(virtual.end, t0 + timedelta(days=9))
         self.assertAlmostEqual(virtual.end_price, 7.0)
 
-    def test_virtual_tail_keeps_rejected_fractal_and_reaches_latest_extreme(self):
+    def test_virtual_tail_collapses_rejected_fractals_to_one_candidate(self):
         t0 = datetime(2026, 1, 1)
         frame = pd.DataFrame({
             "date": [t0 + timedelta(days=i) for i in range(12)],
@@ -128,13 +142,99 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
 
         bis = detector.detect(min_bars=5, include_virtual=True)
 
-        self.assertEqual([bi.confirmed for bi in bis], [True, False, False])
-        self.assertEqual([bi.direction for bi in bis], ["up", "down", "up"])
+        self.assertEqual([bi.confirmed for bi in bis], [True, False])
+        self.assertEqual([bi.direction for bi in bis], ["up", "down"])
+        self.assertEqual(bis[-1].rule, "virtual")
         for previous, current in zip(bis, bis[1:]):
             self.assertEqual(previous.end, current.start)
             self.assertAlmostEqual(previous.end_price, current.start_price)
-        self.assertEqual(bis[-1].end, t0 + timedelta(days=11))
-        self.assertAlmostEqual(bis[-1].end_price, 18.0)
+        self.assertEqual(bis[-1].end, t0 + timedelta(days=7))
+        self.assertAlmostEqual(bis[-1].end_price, 10.0)
+
+    def test_new_pen_accepts_raw_five_bars_when_processed_gap_is_three(self):
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(8)],
+            "open": [10.0] * 8,
+            "high": [11.0] * 8,
+            "low": [9.0] * 8,
+            "close": [10.0] * 8,
+            "volume": [100.0] * 8,
+        })
+        fenxings = [
+            Fenxing(t0 + timedelta(days=1), "bottom", 10.0, 8.0, 1, raw_index=1),
+            Fenxing(t0 + timedelta(days=5), "top", 13.0, 12.0, 4, raw_index=5),
+        ]
+        new_detector = BiDetector(frame, bi_mode="new")
+        old_detector = BiDetector(frame, bi_mode="old")
+        new_detector._fenxing_detector.klines = frame.copy()
+        old_detector._fenxing_detector.klines = frame.copy()
+        new_detector._fenxing_detector.detect = Mock(return_value=fenxings)
+        old_detector._fenxing_detector.detect = Mock(return_value=fenxings)
+
+        new_bis = new_detector.detect()
+        old_bis = old_detector.detect()
+
+        self.assertEqual(len(new_bis), 1)
+        self.assertEqual(new_bis[0].rule, "new")
+        self.assertEqual(old_bis, [])
+
+    def test_new_pen_rejects_fractals_that_share_processed_kline(self):
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(8)],
+            "open": [10.0] * 8,
+            "high": [11.0] * 8,
+            "low": [9.0] * 8,
+            "close": [10.0] * 8,
+            "volume": [100.0] * 8,
+        })
+        detector = BiDetector(frame, bi_mode="new")
+        detector._fenxing_detector.klines = frame.copy()
+        detector._fenxing_detector.detect = Mock(return_value=[
+            Fenxing(t0 + timedelta(days=1), "bottom", 10.0, 8.0, 1, raw_index=1),
+            Fenxing(t0 + timedelta(days=5), "top", 13.0, 12.0, 3, raw_index=5),
+        ])
+
+        self.assertEqual(detector.detect(), [])
+
+    def test_detect_rejects_inverted_price_direction(self):
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(8)],
+            "open": [10.0] * 8,
+            "high": [11.0] * 8,
+            "low": [9.0] * 8,
+            "close": [10.0] * 8,
+            "volume": [100.0] * 8,
+        })
+        detector = BiDetector(frame)
+        detector._fenxing_detector.klines = frame.copy()
+        detector._fenxing_detector.detect = Mock(return_value=[
+            Fenxing(t0 + timedelta(days=1), "bottom", 11.0, 10.0, 1, raw_index=1),
+            Fenxing(t0 + timedelta(days=5), "top", 9.0, 8.0, 5, raw_index=5),
+        ])
+
+        self.assertEqual(detector.detect(), [])
+
+    def test_detect_rejects_end_that_is_not_interval_peak(self):
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(8)],
+            "open": [10.0] * 8,
+            "high": [10.0, 10.0, 15.0, 11.0, 12.0, 13.0, 12.0, 11.0],
+            "low": [9.0] * 8,
+            "close": [10.0] * 8,
+            "volume": [100.0] * 8,
+        })
+        detector = BiDetector(frame)
+        detector._fenxing_detector.klines = frame.copy()
+        detector._fenxing_detector.detect = Mock(return_value=[
+            Fenxing(t0 + timedelta(days=1), "bottom", 10.0, 8.0, 1, raw_index=1),
+            Fenxing(t0 + timedelta(days=5), "top", 13.0, 12.0, 5, raw_index=5),
+        ])
+
+        self.assertEqual(detector.detect(), [])
 
 
 if __name__ == "__main__":

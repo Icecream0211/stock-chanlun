@@ -74,7 +74,20 @@ def get_stock_news(limit: int = 10) -> list:
         log.info("东方财富资讯获取成功 count=%s", len(news))
         return news
 
-    log.warning("新闻所有来源均获取失败")
+    # ④ iFinD MCP 最终兜底（凭证仅来自本地环境变量）
+    try:
+        from services.ifind_mcp_service import get_news as get_ifind_mcp_news
+
+        news = get_ifind_mcp_news(limit)
+    except Exception:
+        log.exception("iFinD MCP 新闻兜底失败")
+        news = []
+    if news:
+        _cache_set(cache_key, news, ttl=300)
+        log.info("iFinD MCP 新闻兜底成功 count=%s", len(news))
+        return news
+
+    log.warning("新闻所有来源均获取失败（含 iFinD MCP）")
     return []
 
 
@@ -206,7 +219,17 @@ def normalize_stock_code(code: str) -> tuple[str, str]:
     """规范化股票代码，返回 (market_code, exchange)
        sz=深圳, sh=上海
     """
-    code = code.strip().zfill(6)
+    raw = str(code or "").strip().lower()
+    explicit_exchange: str | None = None
+    if raw.startswith(("sh", "sz", "bj")):
+        explicit_exchange, raw = raw[:2], raw[2:]
+    elif "." in raw:
+        raw, suffix = raw.split(".", 1)
+        if suffix in ("sh", "sz", "bj"):
+            explicit_exchange = suffix
+    code = raw.zfill(6)
+    if explicit_exchange:
+        return code, explicit_exchange
     if code.startswith(('00', '30', '002', '003')):
         return code, "sz"
     elif code.startswith(('60', '68', '500', '501')):
@@ -218,14 +241,8 @@ def normalize_stock_code(code: str) -> tuple[str, str]:
 
 def _get_qq_market_code(code: str) -> str:
     """获取腾讯API的市场前缀"""
-    code = code.strip().zfill(6)
-    if code.startswith(('00', '30', '002', '003')):
-        return "sz"  # 深圳
-    elif code.startswith(('60', '68', '500', '501')):
-        return "sh"  # 上海
-    elif code.startswith('8') or code.startswith('4'):
-        return "bj"  # 北交所
-    return "sz"
+    _, exchange = normalize_stock_code(code)
+    return exchange
 
 
 def get_realtime_quote(codes: list[str]) -> pd.DataFrame:
@@ -1079,15 +1096,57 @@ def get_market_overview_bundle() -> dict:
                 indices[key] = {}
     breadth = get_a_share_market_breadth()
     all_boards = get_all_industry_boards()
+    data_sources: list[str] = []
+    if any(float((row or {}).get("price", 0) or 0) > 0 for row in indices.values()):
+        data_sources.append("legacy")
+
+    # 指数或涨跌家数不完整时，用 iFinD MCP 补洞；行业板块仍保留原接口结果。
+    indices_incomplete = any(
+        float((indices.get(key) or {}).get("price", 0) or 0) <= 0
+        for key in ("sh", "sz", "cyb", "kc50", "hs300", "zz500")
+    )
+    breadth_empty = sum(int(breadth.get(key, 0) or 0) for key in ("advancers", "decliners", "unchanged")) <= 0
+    if indices_incomplete or breadth_empty:
+        try:
+            from services.ifind_mcp_service import get_market_overview as get_ifind_mcp_market
+
+            fallback = get_ifind_mcp_market()
+        except Exception:
+            log.exception("iFinD MCP 大盘兜底失败")
+            fallback = {}
+        fallback_indices = fallback.get("indices", {}) if fallback else {}
+        for key, row in fallback_indices.items():
+            current = indices.get(key) or {}
+            if float(current.get("price", 0) or 0) <= 0:
+                indices[key] = row
+        if breadth_empty and fallback.get("market_breadth"):
+            breadth = fallback["market_breadth"]
+        if fallback:
+            data_sources.append("ifind_mcp")
+
+    index_instrument_ids = {
+        "sh": "sh000001",
+        "sz": "sz399001",
+        "cyb": "sz399006",
+        "kc50": "sh000688",
+        "hs300": "sz399300",
+        "zz500": "sh000905",
+    }
+    for key, instrument_id in index_instrument_ids.items():
+        if indices.get(key):
+            indices[key]["instrument_id"] = instrument_id
+
     top5 = all_boards[:5]
     bottom5 = list(reversed(all_boards[-5:]))
+    has_indices = any(float((row or {}).get("price", 0) or 0) > 0 for row in indices.values())
     out = {
         "indices": indices,
         "market_breadth": breadth,
         "sectors": all_boards,
         "sectors_top": top5,
         "sectors_bottom": bottom5,
-        "stale": False,
+        "stale": not has_indices,
+        "data_sources": data_sources,
     }
     _cache_set(cache_key, out, ttl=60)
     return out
@@ -1158,11 +1217,24 @@ def search_stocks(keyword: str) -> pd.DataFrame:
                 unique.append(r)
 
         df = pd.DataFrame(unique[:20])
-        _cache_set(cache_key, df, ttl=3600)
-        return df
+        if not df.empty:
+            df.attrs["data_source"] = "sina"
+            _cache_set(cache_key, df, ttl=3600)
+            return df
     except Exception as e:
         log.warning(f"股票搜索失败: {e}")
-        return pd.DataFrame()
+
+    try:
+        from services.ifind_mcp_service import search_stocks as search_ifind_mcp_stocks
+
+        df = search_ifind_mcp_stocks(keyword, limit=20)
+    except Exception:
+        log.exception("iFinD MCP 股票搜索兜底失败")
+        df = pd.DataFrame()
+    if not df.empty:
+        _cache_set(cache_key, df, ttl=3600)
+        log.info("iFinD MCP 股票搜索兜底成功 keyword=%s count=%s", keyword, len(df))
+    return df
 
 
 def get_daily_hot_stocks(limit: int = 20) -> list:
@@ -1196,11 +1268,24 @@ def _fetch_and_cache_hot(limit: int = 20) -> list:
 
     # ③ 新浪人气榜兜底
     stocks = _fetch_sina_hot_stocks(limit)
-    _cache_set(cache_key, stocks, ttl=60)
     if stocks:
+        _cache_set(cache_key, stocks, ttl=60)
         log.info(f"[热门] 新浪人气榜获取成功，共 {len(stocks)} 条")
+        return stocks
+
+    # ④ iFinD MCP 涨幅榜最终兜底
+    try:
+        from services.ifind_mcp_service import get_hot_stocks as get_ifind_mcp_hot_stocks
+
+        stocks = get_ifind_mcp_hot_stocks(limit)
+    except Exception:
+        log.exception("[热门] iFinD MCP 兜底失败")
+        stocks = []
+    _cache_set(cache_key, stocks, ttl=120 if stocks else 30)
+    if stocks:
+        log.info("[热门] iFinD MCP 兜底成功，共 %s 条", len(stocks))
     else:
-        log.warning("[热门] 所有来源均获取失败")
+        log.warning("[热门] 所有来源均获取失败（含 iFinD MCP）")
     return stocks
 
 
@@ -1424,8 +1509,8 @@ def get_stock_depth_em(code: str) -> dict:
     if cached is not None:
         return cached
 
-    sym, _ = normalize_stock_code(code)
-    secid = f"1.{sym}" if sym.startswith("6") else f"0.{sym}"
+    sym, exchange = normalize_stock_code(code)
+    secid = f"1.{sym}" if exchange == "sh" else f"0.{sym}"
     params = {
         "fltt": "2",
         "invt": "2",
@@ -1495,8 +1580,8 @@ def get_stock_boards_em(code: str) -> dict:
     if cached is not None:
         return cached
 
-    sym, _ = normalize_stock_code(code)
-    secid = f"1.{sym}" if sym.startswith("6") else f"0.{sym}"
+    sym, exchange = normalize_stock_code(code)
+    secid = f"1.{sym}" if exchange == "sh" else f"0.{sym}"
     params = {
         "fltt": "2",
         "invt": "2",
@@ -1569,8 +1654,8 @@ def get_stock_boards_em(code: str) -> dict:
 
 def _fetch_em_symbol_news(code: str, limit: int) -> list:
     """东方财富个股新闻（直连 HTTP，避免 akshare 额外开销）。"""
-    sym, _ = normalize_stock_code(code)
-    market_prefix = "SH" if sym.startswith(("5", "6", "9")) else "SZ"
+    sym, exchange = normalize_stock_code(code)
+    market_prefix = exchange.upper()
     secu_code = f"{market_prefix}{sym}"
     try:
         client = _get_client()

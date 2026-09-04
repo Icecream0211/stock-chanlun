@@ -135,6 +135,19 @@ export interface Bi {
   start_price?: number
   end_price?: number
   confirmed?: boolean
+  rule?: 'new' | 'old' | 'simple' | 'fractal' | 'virtual'
+}
+
+export interface KLineInclusion {
+  start: string
+  end: string
+  merged_date: string
+  direction: 'up' | 'down'
+  count: number
+  high: number
+  low: number
+  high_date: string
+  low_date: string
 }
 
 export interface XiangSegment {
@@ -157,6 +170,18 @@ export interface Zhongshu {
   range_low: number
   confirmed?: boolean
   source_type?: 'bi' | 'segment'
+  zg?: number
+  zd?: number
+  gg?: number
+  dd?: number
+  level?: number
+  status?: 'forming' | 'extended' | 'completed' | 'expanded'
+  structure_count?: number
+  extension_count?: number
+  exit_direction?: 'up' | 'down' | null
+  expansion_type?: 'nine_structure' | 'center_overlap' | null
+  parent_id?: string | null
+  child_ids?: string[]
 }
 
 export interface Signal {
@@ -230,6 +255,8 @@ export interface SectorDetail {
 /** 首页大盘概览：主要指数一行 */
 export interface MarketOverviewIndex {
   code: string
+  /** 带交易所的唯一标识，避免上证指数 000001 与平安银行 000001 冲突。 */
+  instrument_id?: string
   name: string
   price: number
   change_pct: number
@@ -337,12 +364,66 @@ export interface ChanlunResult {
   /** 与 /kline 同结构，缠论接口一并返回时可省一次行情请求 */
   klines?: KLine[]
   total?: number
+  inclusions?: KLineInclusion[]
   bis: Bi[]
   xiangs: XiangSegment[]
   bi_zhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   supportResistance: SupportResistance[]
+}
+
+export interface DivergenceSignal {
+  type: 'top' | 'bottom'
+  orientation?: 'top' | 'bottom'
+  /** 缠论结构分类；momentum 只表示指标力度背离，不是标准背驰。 */
+  chan_type?: 'trend' | 'consolidation' | 'momentum'
+  chan_type_label?: string
+  strict_chan?: boolean
+  analysis_level?: string
+  structure_type?: 'bi' | 'segment'
+  structure_level?: number
+  level_label?: string
+  level_meaning?: string
+  /** A/B/C 是指标证据数量的工程评级，不是缠论走势级别。 */
+  evidence_grade?: 'A' | 'B' | 'C'
+  evidence_label?: string
+  evidence_meaning?: string
+  related_center_ids?: string[]
+  center_count?: number
+  theory_note?: string
+  turn_scope?: string
+  large_turn_status?: 'not_evaluated' | 'waiting_third_point' | 'confirmed'
+  large_turn_note?: string
+  /** 结构与力度规则匹配度，不代表未来涨跌成功率。 */
+  match_score?: number
+  /** 未按背驰类型/证据等级封顶前的原始力度分。 */
+  raw_strength_score?: number
+  score_meaning?: string
+  /** 向后兼容字段，语义与 match_score 相同。 */
+  probability: number
+  description: string
+  datetime: string
+  price: number
+  start?: string
+  end?: string
+  previous_datetime?: string
+  previous_price?: number
+  previous_bi_id?: string
+  current_bi_id?: string
+  previous_structure_id?: string
+  current_structure_id?: string
+  macd_ratio?: number
+  macd_force?: 'directional' | 'abs'
+  macd_area_previous?: number
+  macd_area_current?: number
+  rsi_confirm?: boolean
+  kdj_confirm?: boolean
+  confirmations?: string[]
+  confirm_count?: number
+  is_multi?: boolean
+  price_drop?: number
+  price_rise?: number
 }
 
 export interface AISignal {
@@ -357,8 +438,21 @@ export interface AISignal {
   holding_period: string
   description: string
   trend: string
-  divergence?: { type: string; probability: number; description: string } | null
-  resonance?: { 共振: boolean; direction?: string; levels?: string[]; description: string }
+  divergence?: DivergenceSignal | null
+  divergences?: DivergenceSignal[]
+  resonance?: {
+    共振: boolean
+    direction?: string
+    levels?: string[]
+    trends?: Array<{ level: string; trend: string }>
+    description: string
+  }
+  decision_guard?: {
+    applied: boolean
+    mode?: 'counter_trend_rebound' | 'counter_trend_pullback' | null
+    original_direction?: string | null
+    reason?: string | null
+  }
   llm?: {
     model: string
     used: boolean
@@ -380,7 +474,7 @@ export const stockApi = {
     const trimmed = q.trim()
     if (!trimmed) {
       return Promise.resolve({
-        data: { stocks: [] as { code: string; name: string }[], total: 0 },
+        data: { stocks: [] as { code: string; name: string; instrument_id?: string | null }[], total: 0 },
       })
     }
     const key = `GET:/stocks/search?q=${encodeURIComponent(trimmed)}`
@@ -390,7 +484,7 @@ export const stockApi = {
       () => {
         if (searchAbortController) searchAbortController.abort()
         searchAbortController = new AbortController()
-        return api.get<{ stocks: { code: string; name: string }[]; total: number }>(
+        return api.get<{ stocks: { code: string; name: string; instrument_id?: string | null }[]; total: number }>(
           `/stocks/search?q=${encodeURIComponent(trimmed)}`,
           { signal: searchAbortController.signal },
         )

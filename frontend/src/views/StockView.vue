@@ -34,7 +34,7 @@
           <button class="btn btn-ghost" @click="refreshData" :disabled="loadingAny">
             {{ loadingAny ? '加载中...' : '刷新' }}
           </button>
-          <button class="btn btn-ghost" @click="toggleWatch" :class="{ 'btn-danger': isWatching, 'btn-loading': watchToggling }" :disabled="loadingAny || watchToggling">
+          <button v-if="!isIndexInstrument" class="btn btn-ghost" @click="toggleWatch" :class="{ 'btn-danger': isWatching, 'btn-loading': watchToggling }" :disabled="loadingAny || watchToggling">
             <span v-if="watchToggling" class="btn-spinner" />
             <span v-else>{{ isWatching ? '取消自选' : '+自选' }}</span>
           </button>
@@ -79,7 +79,7 @@
         <div class="card stock-info-card">
           <div class="stock-header">
             <div>
-              <div class="stock-code-label mono">{{ stockCode }}</div>
+              <div class="stock-code-label mono">{{ displayCode }}</div>
               <div class="stock-name-label">{{ headerQuote?.name || stockCode }}</div>
             </div>
             <div class="stock-price-block">
@@ -304,6 +304,7 @@
 
         <KLineChart
           :klines="store.klines"
+          :inclusions="store.chanlunResult?.inclusions || []"
           :bis="store.chanlunResult?.bis || []"
           :bi-zhongshus="store.chanlunResult?.bi_zhongshus || []"
           :xiangs="store.chanlunResult?.xiangs || []"
@@ -374,6 +375,8 @@ const isWatching = computed(() =>
 )
 
 const stockCode = computed(() => route.params.code as string)
+const displayCode = computed(() => stockCode.value.replace(/^(sh|sz|bj)/i, ''))
+const isIndexInstrument = computed(() => /^(sh|sz)\d{6}$/i.test(stockCode.value))
 const { levelTrends } = useMultiLevelTrends(stockCode, MULTI_LEVEL_TREND_LEVELS, () => store.chanlunResult)
 const currentLevel = computed(() => store.currentLevel)
 const loadingAny = computed(() =>

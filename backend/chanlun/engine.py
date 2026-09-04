@@ -1,13 +1,19 @@
-"""
-缠论分析引擎 — 整合所有组件
-"""
-import pandas as pd
+"""缠论分析引擎 — 整合所有组件。"""
 from datetime import datetime
-from .elements import (
-    KLine, Bi, XiangSegment, Zhongshu, BuySellPoint,
-    ChanlunAnalysis
-)
+
+import pandas as pd
+
+from config import CHANLUN_BI_MODE
+
 from .bi_detector import BiDetector
+from .elements import (
+    Bi,
+    BuySellPoint,
+    ChanlunAnalysis,
+    KLine,
+    XiangSegment,
+    Zhongshu,
+)
 from .segment_detector import SegmentDetector
 from .signals import SignalDetector
 
@@ -42,8 +48,9 @@ class ChanlunEngine:
     def analyze(self, level: str = "daily") -> ChanlunAnalysis:
         """执行完整缠论分析"""
         # 笔检测器内部已完成分型识别与包含处理，无需单独跑一遍分型
-        bi_detector = BiDetector(self.raw_klines)
+        bi_detector = BiDetector(self.raw_klines, bi_mode=CHANLUN_BI_MODE)
         bis = bi_detector.detect(min_bars=5, include_virtual=True)
+        inclusions = bi_detector.inclusions
         confirmed_bis = [bi for bi in bis if bi.confirmed]
 
         # 3. 线段识别
@@ -75,6 +82,7 @@ class ChanlunEngine:
             stock_code="",
             level=level,
             klines=kline_objects,
+            inclusions=inclusions,
             bis=bis,
             xiangs=segments,
             zhongshus=zhongshus,

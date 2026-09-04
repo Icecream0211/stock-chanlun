@@ -4,7 +4,7 @@
       <span class="card-title">缠论信号</span>
       <div class="header-right">
         <span v-if="updatedAt" class="card-time">{{ updatedAt }}</span>
-        <span class="info-icon" title="一买=首次底部背驰买入 | 二买=回踩不破一买买入 | 三买=突破中枢后回踩买入 | 一卖=首次顶部背驰卖出 | 二卖=反弹不破一卖卖出 | 三卖=跌破中枢后反弹卖出">?</span>
+        <span class="info-icon" title="一买=下跌趋势背驰后的第一类买点 | 二买=回踩不破一买 | 三买=离开中枢后回试不进中枢 | 一卖/二卖/三卖方向相反；盘整背驰或力度背离不自动等于一买/一卖">?</span>
       </div>
     </div>
 

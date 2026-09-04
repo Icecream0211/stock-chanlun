@@ -1,8 +1,8 @@
 """
 线段与中枢检测器
 """
-from typing import Optional
-from datetime import datetime
+from typing import Literal, Optional
+
 from .elements import Bi, XiangSegment, Zhongshu
 
 
@@ -13,12 +13,23 @@ class SegmentDetector:
     - 至少3笔构成线段；同向端点形成局部极值时确认线段结束
     - 相邻线段共享同一个转折端点
 
-    中枢规则:
-    - 3个（或以上）连续同级别线段的重叠区域构成中枢
+    中枢规则（standard 模式）:
+    - 3个连续、方向交替的已完成同级结构存在交集时形成中枢
+    - 初始三结构确定固定核心 [ZD, ZG]，后续延伸不收窄核心
+    - 离开后须由下一结构回抽不进入核心，才能确认中枢结束
+    - 九结构延伸或相邻同级中枢外围区间重叠时，生成高一级父中枢
     """
 
-    def __init__(self, bis: list[Bi]):
+    def __init__(
+        self,
+        bis: list[Bi],
+        *,
+        zhongshu_mode: Literal["standard", "all_overlap"] = "standard",
+        price_epsilon: float = 1e-8,
+    ):
         self.bis = bis
+        self.zhongshu_mode = zhongshu_mode
+        self.price_epsilon = max(0.0, float(price_epsilon))
 
     def detect_segments(self, min_overlap_bis: int = 3, max_iterations: int = 10000) -> list[XiangSegment]:
         """
@@ -140,19 +151,145 @@ class SegmentDetector:
         self,
         structures: list[Bi] | list[XiangSegment],
         *,
-        source_type: str,
+        source_type: Literal["bi", "segment"],
+        level: int,
+        id_prefix: str,
+    ) -> list[Zhongshu]:
+        """按选定模式识别中枢；默认使用固定核心的标准模式。"""
+        if len(structures) < 3:
+            return []
+
+        if self.zhongshu_mode == "all_overlap":
+            return self._detect_all_overlap_zhongshus(
+                structures,
+                source_type=source_type,
+                level=level,
+                id_prefix=id_prefix,
+            )
+
+        base = self._detect_standard_zhongshus(
+            structures,
+            source_type=source_type,
+            level=level,
+            id_prefix=id_prefix,
+        )
+        expanded = self._detect_expanded_zhongshus(
+            base,
+            id_prefix=id_prefix,
+            structures=structures,
+        )
+        return sorted([*base, *expanded], key=lambda z: (z.end, z.level, z.start))
+
+    def _detect_standard_zhongshus(
+        self,
+        structures: list[Bi] | list[XiangSegment],
+        *,
+        source_type: Literal["bi", "segment"],
         level: int,
         id_prefix: str,
     ) -> list[Zhongshu]:
         """
-        通用中枢滑动窗口：
-        遍历同级结构序列，每取得连续3个结构计算重叠区间：
-        - 有重叠 → 构成中枢，尝试向后延伸（后续线段若与之重叠则并入）
-        - 无重叠 → 跳过，继续寻找下一组
-        相邻中枢之间不会重复使用同一个初始三结构窗口。
+        标准中枢状态机。
+
+        初始三结构固定 ZD/ZG。后续结构若进入核心则延伸；若离开核心，
+        必须等下一反向结构回抽确认。回抽重入则继续延伸，回抽仍在核心外
+        才结束原中枢。末尾只有离开而没有回抽时，不提前确认中枢被破坏。
         """
-        if len(structures) < 3:
-            return []
+        zhongshus: list[Zhongshu] = []
+        i = 0
+
+        while i <= len(structures) - 3:
+            group = structures[i:i + 3]
+            if not self._is_alternating_triplet(group):
+                i += 1
+                continue
+
+            zg = float(min(s.high for s in group))
+            zd = float(max(s.low for s in group))
+            if not self._has_overlap(zg, zd):
+                i += 1
+                continue
+
+            included = list(group)
+            cursor = i + 3
+            completed = False
+            # 一条结构可以与核心有交集、但终点已经离开核心。此时下一条
+            # 反向结构就是回抽，不能再把它误当成“首次离开”。
+            pending_exit_direction = self._point_outside_direction(
+                group[-1].end_price, zd, zg
+            )
+            exit_direction = None
+
+            while cursor < len(structures):
+                current = structures[cursor]
+
+                if pending_exit_direction is not None:
+                    if self._intersects_core(current, zd, zg):
+                        included.append(current)
+                        pending_exit_direction = self._point_outside_direction(
+                            current.end_price, zd, zg
+                        )
+                        cursor += 1
+                        continue
+
+                    # 离开核心后的已确认反向结构仍未进入核心，原中枢结束。
+                    completed = True
+                    exit_direction = pending_exit_direction
+                    break
+
+                if self._intersects_core(current, zd, zg):
+                    included.append(current)
+                    pending_exit_direction = self._point_outside_direction(
+                        current.end_price, zd, zg
+                    )
+                    cursor += 1
+                    continue
+
+                # 正常连续结构不会从核心内瞬移到完全位于核心外。为兼容脏数据，
+                # 仍将其记录为待确认离开，等待下一条反向结构决定是否返回。
+                pending_exit_direction = self._outside_direction(current, zd, zg)
+                if cursor + 1 >= len(structures):
+                    break
+                cursor += 1
+
+            structure_count = len(included)
+            status = "completed" if completed else (
+                "extended" if structure_count > 3 else "forming"
+            )
+            zhongshus.append(Zhongshu(
+                id=f"{id_prefix}_{len(zhongshus) + 1}",
+                start=group[0].start,
+                end=included[-1].end,
+                range_high=zg,
+                range_low=zd,
+                zg=zg,
+                zd=zd,
+                gg=float(max(s.high for s in included)),
+                dd=float(min(s.low for s in included)),
+                xiang_ids=[s.id for s in included],
+                level=level,
+                confirmed=all(getattr(s, "confirmed", True) for s in group),
+                source_type=source_type,
+                status=status,
+                structure_count=structure_count,
+                extension_count=max(0, structure_count - 3),
+                exit_direction=exit_direction if completed else None,
+            ))
+
+            # 已确认离开时，从离开结构重新寻找下一中枢；其余情况已到序列尾部。
+            i = cursor if completed else len(structures)
+
+        return zhongshus
+
+    def _detect_all_overlap_zhongshus(
+        self,
+        structures: list[Bi] | list[XiangSegment],
+        *,
+        source_type: Literal["bi", "segment"],
+        level: int,
+        id_prefix: str,
+    ) -> list[Zhongshu]:
+        """兼容旧版“所有已纳入结构持续求交集”的工程模式。"""
 
         zhongshus: list[Zhongshu] = []
         i = 0
@@ -164,7 +301,7 @@ class SegmentDetector:
             range_high = min(s.high for s in group)
             range_low = max(s.low for s in group)
 
-            if range_high > range_low:
+            if self._has_overlap(range_high, range_low):
                 # 重叠 → 形成中枢，尝试向后延伸
                 cur_start = group[0].start
                 cur_end = group[-1].end
@@ -174,7 +311,7 @@ class SegmentDetector:
                 while extend_idx < len(structures):
                     nxt = structures[extend_idx]
                     # 新段与当前中枢重叠 → 并入；中枢区间取所有段的交叠（收窄），而非并集
-                    if nxt.high > range_low and nxt.low < range_high:
+                    if self._intersects_core(nxt, range_low, range_high):
                         range_high = min(range_high, nxt.high)
                         range_low = max(range_low, nxt.low)
                         cur_end = nxt.end
@@ -189,16 +326,245 @@ class SegmentDetector:
                     end=cur_end,
                     range_high=float(range_high),
                     range_low=float(range_low),
+                    zg=float(range_high),
+                    zd=float(range_low),
+                    gg=float(max(s.high for s in structures[i:extend_idx])),
+                    dd=float(min(s.low for s in structures[i:extend_idx])),
                     xiang_ids=xiang_ids,
                     level=level,
                     confirmed=all(getattr(s, "confirmed", True) for s in structures[i:extend_idx]),
                     source_type=source_type,
+                    status="extended" if len(xiang_ids) > 3 else "forming",
+                    structure_count=len(xiang_ids),
+                    extension_count=max(0, len(xiang_ids) - 3),
                 ))
                 i = extend_idx  # 跳到中枢结束后的第一个线段
             else:
                 i += 1
 
         return zhongshus
+
+    def _detect_expanded_zhongshus(
+        self,
+        base: list[Zhongshu],
+        *,
+        id_prefix: str,
+        structures: Optional[list[Bi] | list[XiangSegment]] = None,
+    ) -> list[Zhongshu]:
+        """根据九结构递归和相邻同级中枢外围重叠生成高一级父中枢。
+
+        九结构升级不能只看数量：必须把 S1..S9 固定分为 3+3+3，使用
+        三个组合走势的完整波动区间重新求交集。两个同级中枢升级则要求
+        核心区间已经分离、但外围波动区间仍有重叠；核心重叠属于延伸，
+        外围也分离属于同级趋势延续。
+        """
+        expanded: list[Zhongshu] = []
+        structure_by_id = {s.id: s for s in structures or []}
+
+        for child in base:
+            if child.structure_count < 9:
+                continue
+            child_structures = [
+                structure_by_id[structure_id]
+                for structure_id in child.xiang_ids
+                if structure_id in structure_by_id
+            ]
+            complete_count = len(child_structures) // 3 * 3
+            if complete_count < 9:
+                continue
+
+            grouped: list[dict] = []
+            for offset in range(0, complete_count, 3):
+                triplet = child_structures[offset:offset + 3]
+                if not self._is_alternating_triplet(triplet):
+                    break
+                grouped.append({
+                    "start": triplet[0].start,
+                    "end": triplet[-1].end,
+                    "high": float(max(s.high for s in triplet)),
+                    "low": float(min(s.low for s in triplet)),
+                    "structures": triplet,
+                })
+            if len(grouped) < 3:
+                continue
+
+            initial_groups = grouped[:3]
+            parent_zg = float(min(group["high"] for group in initial_groups))
+            parent_zd = float(max(group["low"] for group in initial_groups))
+            if not self._has_overlap(parent_zg, parent_zd):
+                continue
+
+            included_groups = list(initial_groups)
+            cursor = 3
+            while cursor < len(grouped):
+                current = grouped[cursor]
+                if self._range_intersects_core(
+                    current["low"], current["high"], parent_zd, parent_zg
+                ):
+                    included_groups.append(current)
+                    cursor += 1
+                    continue
+
+                # 与基础中枢一致：高一级走势离开后，下一反向走势重新进入
+                # 固定核心，仍算高一级中枢延伸；否则父中枢在离开前结束。
+                if cursor + 1 >= len(grouped):
+                    break
+                pullback = grouped[cursor + 1]
+                if self._range_intersects_core(
+                    pullback["low"], pullback["high"], parent_zd, parent_zg
+                ):
+                    included_groups.extend([current, pullback])
+                    cursor += 2
+                    continue
+                break
+
+            included_structures = [
+                structure
+                for group in included_groups
+                for structure in group["structures"]
+            ]
+            parent = Zhongshu(
+                id=f"{id_prefix}_expanded_{len(expanded) + 1}",
+                start=included_structures[0].start,
+                end=included_structures[-1].end,
+                range_high=parent_zg,
+                range_low=parent_zd,
+                zg=parent_zg,
+                zd=parent_zd,
+                gg=float(max(s.high for s in included_structures)),
+                dd=float(min(s.low for s in included_structures)),
+                xiang_ids=[s.id for s in included_structures],
+                level=child.level + 1,
+                confirmed=all(getattr(s, "confirmed", True) for s in included_structures),
+                source_type=child.source_type,
+                status="expanded",
+                structure_count=len(included_structures),
+                extension_count=max(0, len(included_groups) - 3),
+                expansion_type="nine_structure",
+                child_ids=[child.id],
+            )
+            child.parent_id = parent.id
+            expanded.append(parent)
+
+        for left, right in zip(base, base[1:]):
+            # 同一个基础中枢只能归属于一个直接父中枢。旧实现允许
+            # A+B、B+C 同时生成两个父中枢，B 被重复挂载，图上会出现
+            # 一串彼此覆盖的“扩展”标记，也破坏了层级树的一致性。
+            if left.parent_id is not None or right.parent_id is not None:
+                continue
+            if (
+                left.level != right.level
+                or left.source_type != right.source_type
+                or not left.confirmed
+                or not right.confirmed
+                # 相邻走势通常共享同一个转折时刻；只有真正时间倒序才非法。
+                or left.end > right.start
+                or set(left.xiang_ids).intersection(right.xiang_ids)
+            ):
+                continue
+            left_gg = left.gg if left.gg is not None else left.range_high
+            left_dd = left.dd if left.dd is not None else left.range_low
+            right_gg = right.gg if right.gg is not None else right.range_high
+            right_dd = right.dd if right.dd is not None else right.range_low
+            left_zg = left.zg if left.zg is not None else left.range_high
+            left_zd = left.zd if left.zd is not None else left.range_low
+            right_zg = right.zg if right.zg is not None else right.range_high
+            right_zd = right.zd if right.zd is not None else right.range_low
+
+            # 同级上涨：后中枢核心在上；外围仍重叠才升级，外围完全分离
+            # (DD2 > GG1) 则是同级上涨趋势延续。下跌方向对称。
+            right_is_above = right_zd > left_zg + self.price_epsilon
+            right_is_below = right_zg < left_zd - self.price_epsilon
+            if not (right_is_above or right_is_below):
+                # 两核心仍重叠，不能把原中枢延伸误标为高一级扩张。
+                continue
+            if right_is_above and right_dd > left_gg + self.price_epsilon:
+                continue
+            if right_is_below and right_gg < left_dd - self.price_epsilon:
+                continue
+
+            parent_zg = float(min(left_gg, right_gg))
+            parent_zd = float(max(left_dd, right_dd))
+            if not self._has_overlap(parent_zg, parent_zd):
+                continue
+
+            parent = Zhongshu(
+                id=f"{id_prefix}_expanded_{len(expanded) + 1}",
+                start=left.start,
+                end=right.end,
+                range_high=parent_zg,
+                range_low=parent_zd,
+                zg=parent_zg,
+                zd=parent_zd,
+                gg=float(max(left_gg, right_gg)),
+                dd=float(min(left_dd, right_dd)),
+                xiang_ids=list(dict.fromkeys([*left.xiang_ids, *right.xiang_ids])),
+                level=max(left.level, right.level) + 1,
+                confirmed=left.confirmed and right.confirmed,
+                source_type=left.source_type,
+                status="expanded",
+                structure_count=left.structure_count + right.structure_count,
+                extension_count=left.extension_count + right.extension_count,
+                expansion_type="center_overlap",
+                child_ids=[left.id, right.id],
+            )
+            left.parent_id = parent.id
+            right.parent_id = parent.id
+            expanded.append(parent)
+
+        return expanded
+
+    def _has_overlap(self, high: float, low: float) -> bool:
+        """允许在最小价格容差内退化为一价中枢。"""
+        return float(high) + self.price_epsilon >= float(low)
+
+    def _intersects_core(self, structure: Bi | XiangSegment, zd: float, zg: float) -> bool:
+        return self._range_intersects_core(structure.low, structure.high, zd, zg)
+
+    def _range_intersects_core(
+        self,
+        low: float,
+        high: float,
+        zd: float,
+        zg: float,
+    ) -> bool:
+        return (
+            float(high) + self.price_epsilon >= zd
+            and float(low) - self.price_epsilon <= zg
+        )
+
+    @staticmethod
+    def _is_alternating_triplet(group: list[Bi] | list[XiangSegment]) -> bool:
+        return (
+            len(group) == 3
+            and group[0].direction != group[1].direction
+            and group[0].direction == group[2].direction
+            and all(getattr(s, "confirmed", True) for s in group)
+        )
+
+    @staticmethod
+    def _outside_direction(
+        structure: Bi | XiangSegment,
+        zd: float,
+        zg: float,
+    ) -> Optional[Literal["up", "down"]]:
+        if structure.low > zg:
+            return "up"
+        if structure.high < zd:
+            return "down"
+        return None
+
+    @staticmethod
+    def _point_outside_direction(
+        price: float,
+        zd: float,
+        zg: float,
+    ) -> Optional[Literal["up", "down"]]:
+        if price > zg:
+            return "up"
+        if price < zd:
+            return "down"
+        return None
 
     def get_zhongshu_for_price(self, zhongshus: list[Zhongshu],
                                  price: float) -> Optional[Zhongshu]:

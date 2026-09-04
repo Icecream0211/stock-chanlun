@@ -49,7 +49,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import echarts from '../../utils/echarts'
-import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
+import type { KLine, KLineInclusion, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '@/api/stock'
 import type { IndicatorConfig } from '@/stores/chanlun'
 import { calcMA, calcMACDHistogram, computeDualMacdSkdjMarkerIndices } from '@/utils/stockIndicators'
 import { downsampleKlines, klineSeriesSignature } from '@/utils/chartDownsample'
@@ -75,6 +75,7 @@ const SWIPE_THRESHOLD = 50
 
 const props = defineProps<{
   klines: KLine[]
+  inclusions?: KLineInclusion[]
   bis: Bi[]
   biZhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
@@ -95,6 +96,7 @@ const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
 
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
+  ...(props.inclusions ?? []).flatMap(item => [item.start, item.end]),
   ...props.bis.flatMap(item => [item.start, item.end]),
   ...(props.biZhongshus ?? []).flatMap(item => [item.start, item.end]),
   ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
@@ -119,6 +121,8 @@ type DataZoomOption = { startValue?: number; endValue?: number; start?: number; 
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
+    inclusions: true,
+    divergences: true,
     bis: true, biZhongshus: true, xiangs: true, zhongshus: true,
     signals: true, aiLines: false, supportResistance: false,
     volume: true, macd: false, rsi: false, skdj: false,
@@ -234,6 +238,7 @@ function buildOverlayData(): ChanlunOverlayPayload {
   return buildChanlunOverlayCache({
     dates: lastDates,
     seriesKlines: chartKlines,
+    inclusions: props.inclusions,
     bis: props.bis,
     biZhongshus: props.biZhongshus,
     xiangs: props.xiangs,
@@ -242,6 +247,8 @@ function buildOverlayData(): ChanlunOverlayPayload {
     aiSignal: props.aiSignal,
     supportResistance: props.supportResistance,
     flags: {
+      inclusions: ind.inclusions,
+      divergences: ind.divergences,
       bis: ind.bis,
       biZhongshus: ind.biZhongshus,
       xiangs: ind.xiangs,
@@ -664,13 +671,15 @@ watch(
 )
 
 watch(
-  () => [props.bis, props.biZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
+  () => [props.inclusions, props.bis, props.biZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
   updateOverlayOnly,
   { deep: true }
 )
 
 watch(
   () => [
+    props.indicators?.inclusions,
+    props.indicators?.divergences,
     props.indicators?.bis,
     props.indicators?.biZhongshus,
     props.indicators?.xiangs,

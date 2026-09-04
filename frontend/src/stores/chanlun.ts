@@ -11,6 +11,8 @@ export interface IndicatorConfig {
   ma5: boolean
   ma20: boolean
   ma60: boolean
+  inclusions: boolean
+  divergences: boolean
   bis: boolean
   biZhongshus: boolean
   xiangs: boolean
@@ -29,6 +31,8 @@ export const defaultIndicators: IndicatorConfig = {
   ma5: true,
   ma20: true,
   ma60: true,
+  inclusions: true,
+  divergences: true,
   bis: true,
   biZhongshus: true,
   /** 四类缠论结构默认展示，用户可在指标面板逐项关闭。 */
@@ -346,7 +350,8 @@ export const useChanlunStore = defineStore('chanlun', () => {
   async function setAiModel(model: string, code: string) {
     aiModel.value = model
     await stockApi.setAiModel(model)
-    await fetchAISignal(code, currentLevel.value, { useLlm: true, force: true })
+    // 切换候选模型只保存偏好；只有用户明确点击“LLM 深度分析”才调用大模型。
+    await fetchAISignal(code, currentLevel.value, { useLlm: false, force: true })
   }
 
   function toggleIndicator(key: keyof IndicatorConfig) {

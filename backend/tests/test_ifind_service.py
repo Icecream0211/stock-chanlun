@@ -12,7 +12,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 import config
-from services import ifind_service, market_data_service
+from services import akshare_service, ifind_service, market_data_service
 
 
 def _kline_result() -> SimpleNamespace:
@@ -75,6 +75,12 @@ class IfindServiceTests(unittest.TestCase):
         self.assertEqual(ifind_service.to_ifind_code("sh600519"), "600519.SH")
         self.assertEqual(ifind_service.to_ifind_code("000001"), "000001.SZ")
         self.assertEqual(ifind_service.to_ifind_code("832000"), "832000.BJ")
+
+    def test_explicit_exchange_disambiguates_index_from_stock(self):
+        self.assertEqual(akshare_service.normalize_stock_code("sh000001"), ("000001", "sh"))
+        self.assertEqual(akshare_service.normalize_stock_code("000001.SH"), ("000001", "sh"))
+        self.assertEqual(akshare_service.normalize_stock_code("000001"), ("000001", "sz"))
+        self.assertEqual(ifind_service.to_ifind_code("sh000001"), "000001.SH")
 
     def test_daily_kline_uses_hq_and_normalizes_columns(self):
         sdk = FakeIfindSdk()

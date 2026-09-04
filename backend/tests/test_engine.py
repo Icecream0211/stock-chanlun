@@ -35,6 +35,15 @@ class ChanlunEngineKlinesTests(unittest.TestCase):
         processed = BiDetector(raw).processed_klines
         self.assertLess(len(processed), len(raw))
 
+    def test_result_exposes_compact_inclusion_groups(self):
+        result = ChanlunEngine(_sample_df()).analyze(level="daily")
+
+        self.assertGreaterEqual(len(result.inclusions), 1)
+        group = result.inclusions[0]
+        self.assertGreaterEqual(group.count, 2)
+        self.assertLess(group.start, group.end)
+        self.assertIn(group.direction, ("up", "down"))
+
 
 if __name__ == "__main__":
     unittest.main()

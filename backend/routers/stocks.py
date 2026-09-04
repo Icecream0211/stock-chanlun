@@ -35,14 +35,31 @@ from services.market_data_service import get_kline_hist, get_realtime_quote
 
 router = APIRouter()
 
+_INDEX_INSTRUMENT_IDS = {
+    ("000001", "上证指数"): "sh000001",
+    ("399001", "深证成指"): "sz399001",
+    ("399006", "创业板指"): "sz399006",
+    ("000688", "科创50"): "sh000688",
+    ("000300", "沪深300"): "sh000300",
+    ("399300", "沪深300"): "sz399300",
+    ("000905", "中证500"): "sh000905",
+}
+
 
 def _search_stock_impl(q: str):
     df = search_stocks(q)
     if df.empty:
-        return {"stocks": [], "total": 0}
+        return {"stocks": [], "total": 0, "data_source": None}
+    stocks = []
+    for row in df.head(20)[["code", "name"]].to_dict(orient="records"):
+        code = str(row.get("code", "")).zfill(6)
+        name = str(row.get("name", ""))
+        row["instrument_id"] = _INDEX_INSTRUMENT_IDS.get((code, name))
+        stocks.append(row)
     return {
-        "stocks": df.head(20)[["code", "name"]].to_dict(orient="records"),
+        "stocks": stocks,
         "total": len(df),
+        "data_source": df.attrs.get("data_source"),
     }
 
 
@@ -249,7 +266,7 @@ async def stock_info(request: Request, code: str):
     check_light_api_rate_limits(client_ip(request))
     def _run():
         sym, exchange = normalize_stock_code(code)
-        info = get_stock_info(sym)
+        info = get_stock_info(code)
         return {"code": sym, "exchange": exchange, "info": info}
 
     return await asyncio.to_thread(_run)
@@ -267,9 +284,9 @@ async def stock_extras(
 
         sym, exchange = normalize_stock_code(code)
         with ThreadPoolExecutor(max_workers=3) as pool:
-            f_depth = pool.submit(get_stock_depth_em, sym)
-            f_boards = pool.submit(get_stock_boards_em, sym)
-            f_news = pool.submit(get_stock_symbol_news_em, sym, news_limit)
+            f_depth = pool.submit(get_stock_depth_em, code)
+            f_boards = pool.submit(get_stock_boards_em, code)
+            f_news = pool.submit(get_stock_symbol_news_em, code, news_limit)
             # 任一子查询失败不应拖垮整个 extras 聚合，分别回退默认值
             try:
                 depth = f_depth.result()
@@ -299,7 +316,7 @@ async def stock_extras(
 
 def _realtime_quote_impl(code: str):
     sym, _ = normalize_stock_code(code)
-    df = get_realtime_quote([sym])
+    df = get_realtime_quote([code])
     if not df.empty:
         row = df.iloc[0]
         return {
@@ -315,7 +332,7 @@ def _realtime_quote_impl(code: str):
             "prev_close": finite_float(row.get("昨收")),
         }
 
-    info = get_stock_info(sym)
+    info = get_stock_info(code)
     if info and (info.get("现价") or info.get("名称")):
         return {
             "code": str(info.get("代码", sym)),

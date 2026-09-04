@@ -3,32 +3,71 @@
 
 贡献者：原作者 · claudecode（2026-08-31 修复笔不相接/方向不交替、min_bars 计数对象错误）
 """
+from typing import Literal
+
 import numpy as np
 import pandas as pd
-from typing import Optional
-from datetime import datetime
-from .elements import Bi
-from .fenxing_detector import FenxingDetector, Fenxing
+
+from .elements import Bi, KLineInclusion
+from .fenxing_detector import Fenxing, FenxingDetector
+
+BiMode = Literal["new", "old", "simple", "fractal"]
 
 
 class BiDetector:
     """
     笔规则:
     1. 顶分型 + 底分型 = 一笔（向上笔: 底→顶，向下笔: 顶→底）
-    2. 笔至少需要5根K线（含分型）
+    2. 默认新笔：顶底分型不共用缠论K线，且极值间至少5根原始K线
     3. 同级别笔由连续顶底分型构成
+    4. old/simple/fractal 为兼容模式，不与默认规则混算
     """
 
-    def __init__(self, klines: pd.DataFrame):
+    def __init__(
+        self,
+        klines: pd.DataFrame,
+        *,
+        bi_mode: BiMode = "new",
+        strict_price: bool = True,
+        end_must_be_peak: bool = True,
+    ):
+        if bi_mode not in ("new", "old", "simple", "fractal"):
+            raise ValueError(f"unsupported bi_mode: {bi_mode}")
         self.klines = klines.reset_index(drop=True)
         self._date_values = self.klines["date"].values
         self._fenxing_detector = FenxingDetector(klines)
         self._fenxings: list[Fenxing] = []
+        self.bi_mode: BiMode = bi_mode
+        self.strict_price = strict_price
+        self.end_must_be_peak = end_must_be_peak
 
     @property
     def processed_klines(self) -> pd.DataFrame:
         """包含关系处理后的 K 线（与笔/分型检测一致）。"""
         return self._fenxing_detector.klines
+
+    @property
+    def inclusions(self) -> list[KLineInclusion]:
+        """返回发生过合并的原始 K 线区间，供图表做紧凑提示。"""
+        groups: list[KLineInclusion] = []
+        for row in self.processed_klines.itertuples(index=False):
+            raw_start = int(getattr(row, "raw_start_idx", 0))
+            raw_end = int(getattr(row, "raw_end_idx", raw_start))
+            direction = getattr(row, "inclusion_direction", None)
+            if raw_end <= raw_start or direction not in ("up", "down"):
+                continue
+            groups.append(KLineInclusion(
+                start=self.klines.iloc[raw_start]["date"],
+                end=self.klines.iloc[raw_end]["date"],
+                merged_date=row.date,
+                direction=direction,
+                count=raw_end - raw_start + 1,
+                high=float(row.high),
+                low=float(row.low),
+                high_date=row.high_date,
+                low_date=row.low_date,
+            ))
+        return groups
 
     @staticmethod
     def compress_fenxings(fenxings: list[Fenxing]) -> list[Fenxing]:
@@ -48,10 +87,10 @@ class BiDetector:
                 continue
 
             if fx.type == "top":
-                if fx.high >= last.high:
+                if fx.high > last.high:
                     out[-1] = fx
             else:  # bottom
-                if fx.low <= last.low:
+                if fx.low < last.low:
                     out[-1] = fx
 
         return out
@@ -59,133 +98,162 @@ class BiDetector:
     def detect(self, min_bars: int = 5, include_virtual: bool = False) -> list[Bi]:
         """
         检测所有笔
-        min_bars: 笔最少K线数（默认5根，按【包含处理后】序列计数）
+        min_bars: 新笔/简单笔按原始K线数，旧笔按包含处理后K线数；标准最小值均为5。
         include_virtual: 是否在确认笔末尾附加一条未确认虚拟笔，供图表展示当前走势。
-          虚拟笔不改变严格成笔条件，调用方不得用它计算中枢、买卖点或趋势。
+          虚拟笔不改变严格成笔条件，只能用于未确认尾段，不能确认中枢、买卖点或趋势。
 
-        --- claudecode 2026-08-31 重写，修复两个结构性缺陷 ---
-
-        缺陷①【笔不首尾相接、方向不交替】
-          原实现逐对扫描分型，`if bar_count >= min_bars` 不满足时**跳过该对但
-          仍 i += 1**，等于把 fx1 也消耗掉了。实测 002202 日线：270 个分型中
-          190 对因K线数不足被跳过，导致 79 笔里出现 60 处断点、37 对同向相邻笔
-          （连续四根 down 的情况都有）。而缠论的笔必须首尾相接、方向交替、
-          无缝覆盖走势。
-          修法：先构造【已确认端点序列】，间隔不足时**忽略该分型、保留前一个端点**
-          （不消耗 last），再由相邻端点成笔 —— 首尾相接与方向交替由构造天然保证。
-
-        缺陷②【min_bars 数错了对象】
-          原用 `_count_klines_between` 数**原始K线**，但分型来自**包含处理后**
-          的序列。分钟级别包含合并率达 40~43%（日线仅 27%），5 根原始K线在
-          5 分钟级别可能只对应 2~3 根处理后K线，远不足以成笔 —— 这是
-          "30分/5分比日线错得更离谱"的直接原因。
-          修法：改用 Fenxing.index（本就是处理后序列的下标）之差，
-          min_bars=5 → 序号差 >= 4（顶底之间至少夹 1 根独立K线，标准缠论口径）。
+        规则口径：
+        - new：处理后分型不共用K线，极值之间至少5根原始K线；
+        - old：包含处理后至少5根K线，顶底间有一根独立K线；
+        - simple/fractal：仅用于兼容外部画法，不作为默认标准。
+        所有模式都保持确认笔首尾相接、方向交替；不合格反向分型不会消耗起点。
         """
-        self._fenxings = self.compress_fenxings(self._fenxing_detector.detect())
+        self._fenxings = self._fenxing_detector.detect()
         if len(self._fenxings) < 2:
             return []
 
-        min_gap = max(1, int(min_bars) - 1)
-
-        # 第一步：构造已确认端点序列
+        # 单次状态扫描：不预先删除分型，避免间距判断前丢失候选端点。
         seq: list[Fenxing] = [self._fenxings[0]]
         for fx in self._fenxings[1:]:
             last = seq[-1]
             if fx.type == last.type:
-                # 同型取更极端（compress_fenxings 已做，此处兜底）
-                if (fx.type == "top" and fx.high >= last.high) or (
-                    fx.type == "bottom" and fx.low <= last.low
-                ):
+                # 同型只在严格创新高/低时后移；同价保留最早端点。
+                if self._is_more_extreme(fx, last):
                     seq[-1] = fx
                 continue
-            if fx.index - last.index >= min_gap:
+            if self._can_make_bi(last, fx, min_bars=min_bars):
                 seq.append(fx)
-            # else: 间隔不足 → 忽略该分型，保留 last（关键，勿改成 seq[-1] = fx）
+            # 不成笔时不消耗 last；后续同型极值仍可延伸上一确认端点。
 
-        # 第二步：相邻端点成笔
         bis: list[Bi] = []
         for a, b in zip(seq, seq[1:]):
-            if a.type == "bottom":
-                bis.append(Bi(
-                    id=f"bi_up_{len(bis)+1}",
-                    start=a.date, end=b.date, direction="up",
-                    high=float(b.high), low=float(a.low),
-                    start_price=float(a.low), end_price=float(b.high),
-                ))
-            else:
-                bis.append(Bi(
-                    id=f"bi_down_{len(bis)+1}",
-                    start=a.date, end=b.date, direction="down",
-                    high=float(a.high), low=float(b.low),
-                    start_price=float(a.high), end_price=float(b.low),
-                ))
+            bis.append(self._build_bi(a, b, len(bis) + 1))
         if include_virtual and seq:
             bis.extend(self._build_virtual_tail(seq[-1], len(bis) + 1))
         return bis
 
+    @staticmethod
+    def _is_more_extreme(candidate: Fenxing, current: Fenxing) -> bool:
+        if candidate.type == "top":
+            return candidate.high > current.high
+        return candidate.low < current.low
+
+    def _can_make_bi(self, start: Fenxing, end: Fenxing, *, min_bars: int) -> bool:
+        if start.type == end.type or end.index <= start.index:
+            return False
+        if not self._satisfies_span(start, end, min_bars=min_bars):
+            return False
+        if self.strict_price and not self._has_valid_price_direction(start, end):
+            return False
+        return not self.end_must_be_peak or self._end_is_peak(start, end)
+
+    def _satisfies_span(self, start: Fenxing, end: Fenxing, *, min_bars: int) -> bool:
+        processed_gap = end.index - start.index
+        raw_start = self._raw_index(start)
+        raw_end = self._raw_index(end)
+        if raw_end <= raw_start:
+            return False
+        raw_count = raw_end - raw_start + 1
+        required = max(5, int(min_bars))
+
+        if self.bi_mode == "old":
+            # 分型中心相隔4根缠论K线，保证两分型间有一根独立K线。
+            return processed_gap >= max(4, required - 1)
+        if self.bi_mode == "new":
+            # 中心相隔3保证三K分型不共用缠论K线；根数按原始极值K线计算。
+            return processed_gap >= 3 and raw_count >= required
+        if self.bi_mode == "simple":
+            return raw_count >= required
+        return True
+
+    @staticmethod
+    def _has_valid_price_direction(start: Fenxing, end: Fenxing) -> bool:
+        if start.type == "bottom":
+            return float(end.high) > float(start.low)
+        return float(end.low) < float(start.high)
+
+    def _end_is_peak(self, start: Fenxing, end: Fenxing) -> bool:
+        window = self.processed_klines.iloc[start.index:end.index + 1]
+        if window.empty:
+            return False
+        if start.type == "bottom":
+            return float(end.high) >= float(window["high"].max()) - 1e-8
+        return float(end.low) <= float(window["low"].min()) + 1e-8
+
+    def _raw_index(self, fx: Fenxing) -> int:
+        if fx.raw_index is not None:
+            return int(fx.raw_index)
+        target = np.datetime64(fx.date)
+        idx = int(np.searchsorted(self._date_values, target, side="left"))
+        return min(max(idx, 0), max(0, len(self._date_values) - 1))
+
+    def _build_bi(self, start: Fenxing, end: Fenxing, number: int) -> Bi:
+        if start.type == "bottom":
+            return Bi(
+                id=f"bi_up_{number}",
+                start=start.date,
+                end=end.date,
+                direction="up",
+                high=float(end.high),
+                low=float(start.low),
+                start_price=float(start.low),
+                end_price=float(end.high),
+                rule=self.bi_mode,
+            )
+        return Bi(
+            id=f"bi_down_{number}",
+            start=start.date,
+            end=end.date,
+            direction="down",
+            high=float(start.high),
+            low=float(end.low),
+            start_price=float(start.high),
+            end_price=float(end.low),
+            rule=self.bi_mode,
+        )
+
     def _build_virtual_tail(self, start: Fenxing, number: int) -> list[Bi]:
         """
-        从最后一个确认分型连接候选分型及最新价格极值，形成绘图用虚拟尾部。
+        从最后确认端点连接到当前反向极值，只绘制一根未确认候选笔。
 
-        尾部尚未出现满足最小间隔的反向分型时，不应强行确认一笔；但完全不画会
-        造成用户看到的“断尾”。这里保留未达成笔间隔的候选分型路径，并连接到
-        当前方向的最新极值。所有路径均标记 confirmed=False，会随行情重算，并在
-        下一次确认分型出现后被正式笔替换。
+        被间距、价格或终点极值规则拒绝的中间分型不再串成多根“伪笔”；候选笔
+        会随行情重算，并在反向分型满足当前模式后替换为正式笔。
         """
         processed = self.processed_klines
-        endpoints = [start]
-        endpoints.extend(fx for fx in self._fenxings if fx.index > start.index)
-        last = endpoints[-1]
+        tail = processed.iloc[start.index + 1:]
+        if tail.empty:
+            return []
 
-        # 最后一根 K 线本身无法成为三 K 分型；追加最后候选端点到实时极值的路径。
-        tail = processed.iloc[last.index + 1:]
-        if not tail.empty:
-            if last.type == "bottom":
-                idx = int(tail["high"].astype(float).idxmax())
-                row = processed.loc[idx]
-                price = float(row["high"])
-                if price > float(last.low):
-                    endpoints.append(Fenxing(
-                        date=row["date"], type="top", high=price,
-                        low=float(row["low"]), index=idx,
-                    ))
-            else:
-                idx = int(tail["low"].astype(float).idxmin())
-                row = processed.loc[idx]
-                price = float(row["low"])
-                if price < float(last.high):
-                    endpoints.append(Fenxing(
-                        date=row["date"], type="bottom", high=float(row["high"]),
-                        low=price, index=idx,
-                    ))
+        if start.type == "bottom":
+            idx = int(tail["high"].astype(float).idxmax())
+            row = processed.loc[idx]
+            end_price = float(row["high"])
+            if end_price <= float(start.low):
+                return []
+            end_date = row.get("high_date", row["date"])
+            direction = "up"
+            start_price = float(start.low)
+        else:
+            idx = int(tail["low"].astype(float).idxmin())
+            row = processed.loc[idx]
+            end_price = float(row["low"])
+            if end_price >= float(start.high):
+                return []
+            end_date = row.get("low_date", row["date"])
+            direction = "down"
+            start_price = float(start.high)
 
-        virtual_bis: list[Bi] = []
-        for a, b in zip(endpoints, endpoints[1:]):
-            start_price = float(a.low if a.type == "bottom" else a.high)
-            end_price = float(b.high if b.type == "top" else b.low)
-            direction = "up" if a.type == "bottom" else "down"
-            end_date = b.date
-            if hasattr(end_date, "to_pydatetime"):
-                end_date = end_date.to_pydatetime()
-            virtual_bis.append(Bi(
-                id=f"bi_virtual_{number + len(virtual_bis)}",
-                start=a.date,
-                end=end_date,
-                direction=direction,
-                high=max(start_price, end_price),
-                low=min(start_price, end_price),
-                start_price=start_price,
-                end_price=end_price,
-                confirmed=False,
-            ))
-        return virtual_bis
-
-    def _count_klines_between(self, start: datetime, end: datetime) -> int:
-        """计算两个时间之间的K线数量（searchsorted，避免全表布尔掩码）"""
-        dates = self._date_values
-        # np.datetime64 显式转换：部分 numpy/pandas 版本组合下，datetime64 数组与裸
-        # datetime/Timestamp 标量比较会抛 TypeError，需先转换为同类型再比较
-        left = int(np.searchsorted(dates, np.datetime64(start), side="left"))
-        right = int(np.searchsorted(dates, np.datetime64(end), side="right"))
-        return max(0, right - left)
+        if hasattr(end_date, "to_pydatetime"):
+            end_date = end_date.to_pydatetime()
+        return [Bi(
+            id=f"bi_virtual_{number}",
+            start=start.date,
+            end=end_date,
+            direction=direction,
+            high=max(start_price, end_price),
+            low=min(start_price, end_price),
+            start_price=start_price,
+            end_price=end_price,
+            confirmed=False,
+            rule="virtual",
+        )]

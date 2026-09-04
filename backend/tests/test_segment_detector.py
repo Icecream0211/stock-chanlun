@@ -7,7 +7,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from chanlun.elements import Bi, XiangSegment
+from chanlun.elements import Bi, XiangSegment, Zhongshu
 from chanlun.segment_detector import SegmentDetector
 
 
@@ -148,14 +148,13 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertAlmostEqual(zhongshus[0].range_high, 12.0)
         self.assertAlmostEqual(zhongshus[0].range_low, 10.0)
 
-    def test_detect_zhongshus_extension_keeps_overlap_not_union(self):
-        # 中枢延伸时区间应取所有段的交叠（收窄），而非并集扩张
+    def test_detect_zhongshus_extension_keeps_initial_core_fixed(self):
+        # 标准中枢由前三段固定 [ZD, ZG]，延伸只增加时间和外围波动范围。
         segments = [
             self._segment(1, "up", 0, 10, 110.0, 100.0),
             self._segment(2, "down", 11, 20, 108.0, 102.0),
             self._segment(3, "up", 21, 30, 109.0, 103.0),
-            # 第4段向上突破但仍与中枢重叠：正确结果收窄到 [105, 108]，
-            # 错误实现会扩张成 [103, 120]
+            # 第4段仍与中枢重叠，但不能把固定核心收窄到 [105, 108]。
             self._segment(4, "down", 31, 40, 120.0, 105.0),
         ]
         detector = SegmentDetector(bis=[])
@@ -164,8 +163,331 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertEqual(len(zhongshus), 1)
         zs = zhongshus[0]
         self.assertAlmostEqual(zs.range_high, 108.0)
-        self.assertAlmostEqual(zs.range_low, 105.0)
+        self.assertAlmostEqual(zs.range_low, 103.0)
+        self.assertAlmostEqual(zs.zg, 108.0)
+        self.assertAlmostEqual(zs.zd, 103.0)
+        self.assertAlmostEqual(zs.gg, 120.0)
+        self.assertAlmostEqual(zs.dd, 100.0)
+        self.assertEqual(zs.status, "extended")
         self.assertEqual(zs.xiang_ids, ["xiang_1", "xiang_2", "xiang_3", "xiang_4"])
+
+    def test_detect_zhongshus_leave_then_return_continues_extension(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 110.0, 100.0),
+            self._segment(2, "down", 11, 20, 108.0, 102.0),
+            self._segment(3, "up", 21, 30, 109.0, 103.0),
+            self._segment(4, "down", 31, 40, 112.0, 106.0),  # 回抽重入
+            self._segment(5, "up", 41, 50, 112.0, 106.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 1)
+        zs = zhongshus[0]
+        self.assertEqual(zs.status, "extended")
+        self.assertIsNone(zs.exit_direction)
+        self.assertEqual(zs.end, segments[4].end)
+        self.assertEqual(zs.structure_count, 5)
+        self.assertEqual(zs.extension_count, 2)
+
+    def test_confirmed_pullback_below_core_completes_extended_center(self):
+        segments = [
+            self._segment(
+                idx,
+                "down" if idx % 2 else "up",
+                (idx - 1) * 10,
+                idx * 10,
+                110.0 + (idx % 3),
+                100.0 + (idx % 2),
+            )
+            for idx in range(1, 9)
+        ]
+        # 第9段穿过核心后向下离开；第10段反弹高点仍低于核心下沿。
+        segments.extend([
+            self._segment(9, "down", 80, 90, 106.0, 95.0),
+            self._segment(10, "up", 90, 100, 100.5, 96.0),
+        ])
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        child = next(z for z in zhongshus if z.status != "expanded")
+        self.assertEqual(child.status, "completed")
+        self.assertEqual(child.exit_direction, "down")
+        self.assertEqual(child.structure_count, 9)
+        self.assertEqual(child.end, segments[8].end)
+        self.assertNotIn(segments[9].id, child.xiang_ids)
+
+    def test_detect_zhongshus_leave_and_failed_return_completes_center(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 110.0, 100.0),
+            self._segment(2, "down", 11, 20, 108.0, 102.0),
+            self._segment(3, "up", 21, 30, 109.0, 103.0),
+            self._segment(4, "down", 31, 40, 120.0, 111.0),
+            self._segment(5, "up", 41, 50, 121.0, 112.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 1)
+        zs = zhongshus[0]
+        self.assertEqual(zs.status, "completed")
+        self.assertEqual(zs.exit_direction, "up")
+        self.assertEqual(zs.end, segments[2].end)
+        self.assertEqual(zs.xiang_ids, ["xiang_1", "xiang_2", "xiang_3"])
+
+    def test_detect_zhongshus_allows_single_price_core(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 110.0, 100.0),
+            self._segment(2, "down", 11, 20, 115.0, 105.0),
+            self._segment(3, "up", 21, 30, 120.0, 110.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 1)
+        self.assertAlmostEqual(zhongshus[0].range_high, 110.0)
+        self.assertAlmostEqual(zhongshus[0].range_low, 110.0)
+
+    def test_detect_zhongshus_nine_structure_extension_creates_parent_center(self):
+        segments = [
+            self._segment(
+                idx,
+                "up" if idx % 2 else "down",
+                (idx - 1) * 10,
+                idx * 10,
+                110.0 + (idx % 3),
+                100.0 + (idx % 2),
+            )
+            for idx in range(1, 10)
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 2)
+        child = next(z for z in zhongshus if z.status != "expanded")
+        parent = next(z for z in zhongshus if z.status == "expanded")
+        self.assertEqual(parent.expansion_type, "nine_structure")
+        self.assertEqual(parent.level, child.level + 1)
+        self.assertEqual(parent.child_ids, [child.id])
+        self.assertEqual(child.parent_id, parent.id)
+        # 高一级核心必须由三个 3 结构组合走势重新求交集，不能复制子中枢核心。
+        self.assertAlmostEqual(child.range_low, 101.0)
+        self.assertAlmostEqual(child.range_high, 110.0)
+        self.assertAlmostEqual(parent.range_low, 100.0)
+        self.assertAlmostEqual(parent.range_high, 112.0)
+        self.assertEqual(parent.structure_count, 9)
+
+    def test_nine_structure_parent_ignores_unconfirmed_partial_group(self):
+        segments = [
+            self._segment(
+                idx,
+                "up" if idx % 2 else "down",
+                (idx - 1) * 10,
+                idx * 10,
+                110.0 + (idx % 3),
+                100.0 + (idx % 2),
+            )
+            for idx in range(1, 11)
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        parent = next(z for z in zhongshus if z.status == "expanded")
+        self.assertEqual(parent.structure_count, 9)
+        self.assertEqual(parent.end, segments[8].end)
+        self.assertNotIn(segments[9].id, parent.xiang_ids)
+
+    def test_detect_zhongshus_outer_ranges_create_higher_level_parent(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 130.0, 100.0),
+            self._segment(2, "down", 11, 20, 108.0, 102.0),
+            self._segment(3, "up", 21, 30, 109.0, 103.0),
+            self._segment(4, "down", 31, 40, 125.0, 115.0),
+            self._segment(5, "up", 41, 50, 128.0, 116.0),
+            self._segment(6, "down", 51, 60, 126.0, 120.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 3)
+        parent = next(z for z in zhongshus if z.status == "expanded")
+        self.assertEqual(parent.expansion_type, "center_overlap")
+        self.assertEqual(parent.child_ids, ["zs_1", "zs_2"])
+        self.assertAlmostEqual(parent.range_low, 115.0)
+        self.assertAlmostEqual(parent.range_high, 128.0)
+
+    def test_center_overlap_allows_shared_boundary_timestamp(self):
+        bases = [
+            Zhongshu(
+                id="zs_1",
+                start=self.t0,
+                end=self.t0 + timedelta(minutes=10),
+                range_high=11.0,
+                range_low=10.0,
+                zg=11.0,
+                zd=10.0,
+                gg=13.0,
+                dd=9.0,
+                xiang_ids=["x1", "x2", "x3"],
+                level=1,
+                source_type="bi",
+                status="completed",
+            ),
+            Zhongshu(
+                id="zs_2",
+                start=self.t0 + timedelta(minutes=10),
+                end=self.t0 + timedelta(minutes=20),
+                range_high=14.0,
+                range_low=12.0,
+                zg=14.0,
+                zd=12.0,
+                gg=15.0,
+                dd=11.5,
+                xiang_ids=["x4", "x5", "x6"],
+                level=1,
+                source_type="bi",
+                status="forming",
+            ),
+        ]
+
+        parents = SegmentDetector(bis=[])._detect_expanded_zhongshus(
+            bases, id_prefix="zs"
+        )
+
+        self.assertEqual(len(parents), 1)
+        self.assertEqual(parents[0].expansion_type, "center_overlap")
+
+    def test_overlapping_center_cores_remain_same_level_extension(self):
+        bases = [
+            Zhongshu(
+                id="zs_1",
+                start=self.t0,
+                end=self.t0 + timedelta(minutes=10),
+                range_high=11.0,
+                range_low=10.0,
+                zg=11.0,
+                zd=10.0,
+                gg=12.0,
+                dd=9.0,
+                xiang_ids=["x1", "x2", "x3"],
+                level=1,
+                source_type="bi",
+                status="completed",
+            ),
+            Zhongshu(
+                id="zs_2",
+                start=self.t0 + timedelta(minutes=20),
+                end=self.t0 + timedelta(minutes=30),
+                range_high=10.8,
+                range_low=10.2,
+                zg=10.8,
+                zd=10.2,
+                gg=11.5,
+                dd=9.5,
+                xiang_ids=["x4", "x5", "x6"],
+                level=1,
+                source_type="bi",
+                status="forming",
+            ),
+        ]
+
+        parents = SegmentDetector(bis=[])._detect_expanded_zhongshus(
+            bases, id_prefix="zs"
+        )
+
+        self.assertEqual(parents, [])
+        self.assertTrue(all(z.parent_id is None for z in bases))
+
+    def test_separated_outer_ranges_are_same_level_trend_not_expansion(self):
+        bases = [
+            Zhongshu(
+                id="zs_1",
+                start=self.t0,
+                end=self.t0 + timedelta(minutes=10),
+                range_high=11.0,
+                range_low=10.0,
+                zg=11.0,
+                zd=10.0,
+                gg=11.5,
+                dd=9.5,
+                xiang_ids=["x1", "x2", "x3"],
+                level=1,
+                source_type="bi",
+                status="completed",
+            ),
+            Zhongshu(
+                id="zs_2",
+                start=self.t0 + timedelta(minutes=20),
+                end=self.t0 + timedelta(minutes=30),
+                range_high=14.0,
+                range_low=13.0,
+                zg=14.0,
+                zd=13.0,
+                gg=14.5,
+                dd=12.0,
+                xiang_ids=["x4", "x5", "x6"],
+                level=1,
+                source_type="bi",
+                status="forming",
+            ),
+        ]
+
+        parents = SegmentDetector(bis=[])._detect_expanded_zhongshus(
+            bases, id_prefix="zs"
+        )
+
+        self.assertEqual(parents, [])
+        self.assertTrue(all(z.parent_id is None for z in bases))
+
+    def test_expanded_parents_do_not_share_the_same_child_center(self):
+        bases = [
+            Zhongshu(
+                id=f"zs_{i + 1}",
+                start=self.t0 + timedelta(minutes=i * 20),
+                end=self.t0 + timedelta(minutes=i * 20 + 10),
+                range_high=high,
+                range_low=low,
+                zg=high,
+                zd=low,
+                gg=gg,
+                dd=dd,
+                xiang_ids=[f"x_{i}_1", f"x_{i}_2", f"x_{i}_3"],
+                level=1,
+                source_type="bi",
+                status="completed",
+                structure_count=3,
+            )
+            for i, (high, low, gg, dd) in enumerate([
+                (11.19, 11.08, 11.35, 10.42),
+                (10.38, 10.18, 10.91, 9.99),
+                (10.93, 10.72, 11.18, 10.40),
+                (11.18, 11.18, 11.75, 11.03),
+            ])
+        ]
+
+        parents = SegmentDetector(bis=[])._detect_expanded_zhongshus(
+            bases, id_prefix="zs"
+        )
+        overlap_parents = [p for p in parents if p.expansion_type == "center_overlap"]
+        child_ids = [child_id for p in overlap_parents for child_id in p.child_ids]
+
+        self.assertEqual(len(overlap_parents), 2)
+        self.assertEqual(len(child_ids), len(set(child_ids)))
+        self.assertTrue(all(z.parent_id is not None for z in bases))
+
+    def test_all_overlap_mode_preserves_legacy_shrinking_algorithm(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 110.0, 100.0),
+            self._segment(2, "down", 11, 20, 108.0, 102.0),
+            self._segment(3, "up", 21, 30, 109.0, 103.0),
+            self._segment(4, "down", 31, 40, 120.0, 105.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[], zhongshu_mode="all_overlap").detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 1)
+        self.assertAlmostEqual(zhongshus[0].range_high, 108.0)
+        self.assertAlmostEqual(zhongshus[0].range_low, 105.0)
 
     def test_get_zhongshu_for_price_returns_latest_matching_zone(self):
         segments = [

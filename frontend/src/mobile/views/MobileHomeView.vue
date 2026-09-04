@@ -17,8 +17,8 @@
             :key="key"
             class="idx-card"
             :class="ix.change_pct >= 0 ? 'card-up' : 'card-down'"
-            @click="go(`/m/stock/${ix.code}`)"
-            v-bind="stockLinkPrefetchHandlers(ix.code)"
+            @click="go(`/m/stock/${ix.instrument_id || ix.code}`)"
+            v-bind="stockLinkPrefetchHandlers(ix.instrument_id || ix.code)"
           >
             <div class="idx-top">
               <span class="idx-name">{{ ix.name }}</span>

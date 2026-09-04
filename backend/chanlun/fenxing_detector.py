@@ -17,6 +17,9 @@ class Fenxing:
     high: float
     low: float
     index: int
+    raw_index: int | None = None  # 分型极值所在的原始 K 线下标
+    raw_start_idx: int | None = None  # 中间缠论 K 线覆盖的原始起点
+    raw_end_idx: int | None = None  # 中间缠论 K 线覆盖的原始终点
 
 
 class FenxingDetector:
@@ -52,6 +55,11 @@ class FenxingDetector:
         out_close = [closes[0]]
         out_date = [dates[0]]
         out_vol = [float(volumes[0])]
+        out_raw_start = [0]
+        out_raw_end = [0]
+        out_high_raw = [0]
+        out_low_raw = [0]
+        out_inclusion_direction: list[str | None] = [None]
 
         def merge_direction(prev_h, prev_l, before_h, before_l, cur_h, cur_l) -> str:
             if len(out_high) >= 2:
@@ -75,22 +83,37 @@ class FenxingDetector:
                 out_close.append(closes[i])
                 out_date.append(dates[i])
                 out_vol.append(float(volumes[i]))
+                out_raw_start.append(i)
+                out_raw_end.append(i)
+                out_high_raw.append(i)
+                out_low_raw.append(i)
+                out_inclusion_direction.append(None)
                 continue
 
             before_h = out_high[-2] if len(out_high) >= 2 else prev_h
             before_l = out_low[-2] if len(out_low) >= 2 else prev_l
             direction = merge_direction(prev_h, prev_l, before_h, before_l, cur_h, cur_l)
-            prev_contains = prev_l <= cur_l and prev_h >= cur_h
             if direction == "up":
+                if cur_h > prev_h:
+                    out_high_raw[-1] = i
+                if cur_l > prev_l:
+                    out_low_raw[-1] = i
                 out_high[-1] = max(prev_h, cur_h)
                 out_low[-1] = max(prev_l, cur_l)
             else:
+                if cur_h < prev_h:
+                    out_high_raw[-1] = i
+                if cur_l < prev_l:
+                    out_low_raw[-1] = i
                 out_high[-1] = min(prev_h, cur_h)
                 out_low[-1] = min(prev_l, cur_l)
             out_close[-1] = closes[i]
             out_vol[-1] += float(volumes[i])
-            if not prev_contains:
-                out_date[-1] = dates[i]
+            out_raw_end[-1] = i
+            out_inclusion_direction[-1] = direction
+            # 保留既有代表日期语义，同时另存高低极值各自的精确原始日期。
+            direction_raw_idx = out_high_raw[-1] if direction == "up" else out_low_raw[-1]
+            out_date[-1] = dates[direction_raw_idx]
 
         self.klines = pd.DataFrame({
             "date": out_date,
@@ -99,6 +122,13 @@ class FenxingDetector:
             "low": out_low,
             "close": out_close,
             "volume": out_vol,
+            "raw_start_idx": out_raw_start,
+            "raw_end_idx": out_raw_end,
+            "high_raw_idx": out_high_raw,
+            "low_raw_idx": out_low_raw,
+            "high_date": [dates[idx] for idx in out_high_raw],
+            "low_date": [dates[idx] for idx in out_low_raw],
+            "inclusion_direction": out_inclusion_direction,
         }).reset_index(drop=True)
 
     def detect(self) -> list[Fenxing]:
@@ -116,6 +146,28 @@ class FenxingDetector:
         highs = df["high"].to_numpy(dtype=float)
         lows = df["low"].to_numpy(dtype=float)
         dates = df["date"].tolist()
+        high_dates = df["high_date"].tolist() if "high_date" in df.columns else dates
+        low_dates = df["low_date"].tolist() if "low_date" in df.columns else dates
+        high_raw_indices = (
+            df["high_raw_idx"].to_numpy(dtype=int)
+            if "high_raw_idx" in df.columns
+            else np.arange(n)
+        )
+        low_raw_indices = (
+            df["low_raw_idx"].to_numpy(dtype=int)
+            if "low_raw_idx" in df.columns
+            else np.arange(n)
+        )
+        raw_starts = (
+            df["raw_start_idx"].to_numpy(dtype=int)
+            if "raw_start_idx" in df.columns
+            else np.arange(n)
+        )
+        raw_ends = (
+            df["raw_end_idx"].to_numpy(dtype=int)
+            if "raw_end_idx" in df.columns
+            else np.arange(n)
+        )
         fenxings: list[Fenxing] = []
 
         prev_h = highs[:-2]
@@ -142,11 +194,14 @@ class FenxingDetector:
             idx = int(i) + 1
             fenxings.append(
                 Fenxing(
-                    date=dates[idx],
+                    date=high_dates[idx],
                     type="top",
                     high=float(mid_h[i]),
                     low=float(mid_l[i]),
                     index=idx,
+                    raw_index=int(high_raw_indices[idx]),
+                    raw_start_idx=int(raw_starts[idx]),
+                    raw_end_idx=int(raw_ends[idx]),
                 )
             )
 
@@ -154,11 +209,14 @@ class FenxingDetector:
             idx = int(i) + 1
             fenxings.append(
                 Fenxing(
-                    date=dates[idx],
+                    date=low_dates[idx],
                     type="bottom",
                     high=float(mid_h[i]),
                     low=float(mid_l[i]),
                     index=idx,
+                    raw_index=int(low_raw_indices[idx]),
+                    raw_start_idx=int(raw_starts[idx]),
+                    raw_end_idx=int(raw_ends[idx]),
                 )
             )
 

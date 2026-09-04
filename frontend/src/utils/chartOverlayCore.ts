@@ -1,17 +1,21 @@
 /**
  * 缠论 ECharts graphic 叠加层 — PC / 移动端共用（索引映射 + 像素渲染）。
  */
-import type { KLine, Bi, XiangSegment, Zhongshu, Signal, AISignal, SupportResistance } from '../api/stock'
+import type { KLine, KLineInclusion, Bi, XiangSegment, Zhongshu, Signal, AISignal, DivergenceSignal, SupportResistance } from '../api/stock'
 import { buildDateLookup, dateToIdxRobust, resolveBarRange } from './chartDateUtils'
 import { simplifySupportResistanceLevels } from './chartOverlayUtils'
 import { CHART_PALETTE } from './chartPalette'
+import { divergenceChanType, divergenceCompactLabel } from './divergencePresentation'
 
 export type GraphicElement = Record<string, unknown>
 
 export type IndexedRange<T> = T & { _s: number; _e: number }
 export type IndexedSignal = Signal & { _idx: number }
+export type IndexedDivergence = DivergenceSignal & { _idx: number; _previousIdx?: number }
 
 export type ChanlunOverlayPayload = {
+  inclusions: IndexedRange<KLineInclusion>[]
+  divergences: IndexedDivergence[]
   bis: IndexedRange<Bi>[]
   biZhongshus: IndexedRange<Zhongshu>[]
   xiangs: IndexedRange<XiangSegment>[]
@@ -24,6 +28,8 @@ export type ChanlunOverlayPayload = {
 }
 
 export type ChanlunOverlayFlags = {
+  inclusions?: boolean
+  divergences?: boolean
   bis: boolean
   biZhongshus: boolean
   xiangs: boolean
@@ -36,6 +42,14 @@ export type ChanlunOverlayFlags = {
 export type ChanlunOverlayTheme = {
   upColor: string
   downColor: string
+  inclusionColor?: string
+  divergenceTopColor?: string
+  divergenceBottomColor?: string
+  divergenceConsolidationTopColor?: string
+  divergenceConsolidationBottomColor?: string
+  divergenceMomentumTopColor?: string
+  divergenceMomentumBottomColor?: string
+  overlayLabelBackground?: string
   biColor: string
   biZhongshuStroke: string
   biZhongshuFill: string
@@ -57,6 +71,14 @@ export type ChanlunOverlayTheme = {
 export const CHANLUN_OVERLAY_THEME_PC: ChanlunOverlayTheme = {
   upColor: CHART_PALETTE.klineUp,
   downColor: CHART_PALETTE.klineDown,
+  inclusionColor: '#8B86A8',
+  divergenceTopColor: '#F97373',
+  divergenceBottomColor: '#34D399',
+  divergenceConsolidationTopColor: '#F59E0B',
+  divergenceConsolidationBottomColor: '#14B8A6',
+  divergenceMomentumTopColor: '#C084FC',
+  divergenceMomentumBottomColor: '#60A5FA',
+  overlayLabelBackground: 'rgba(255,255,255,0.88)',
   biColor: CHART_PALETTE.bi,
   biZhongshuStroke: CHART_PALETTE.biZhongshuStroke,
   biZhongshuFill: CHART_PALETTE.biZhongshuFill,
@@ -78,6 +100,14 @@ export const CHANLUN_OVERLAY_THEME_PC: ChanlunOverlayTheme = {
 export const CHANLUN_OVERLAY_THEME_MOBILE: ChanlunOverlayTheme = {
   upColor: CHART_PALETTE.klineUp,
   downColor: CHART_PALETTE.klineDown,
+  inclusionColor: '#8B86A8',
+  divergenceTopColor: '#FB7185',
+  divergenceBottomColor: '#34D399',
+  divergenceConsolidationTopColor: '#F59E0B',
+  divergenceConsolidationBottomColor: '#2DD4BF',
+  divergenceMomentumTopColor: '#C084FC',
+  divergenceMomentumBottomColor: '#60A5FA',
+  overlayLabelBackground: 'rgba(6,8,12,0.86)',
   biColor: CHART_PALETTE.bi,
   biZhongshuStroke: CHART_PALETTE.biZhongshuStroke,
   biZhongshuFill: CHART_PALETTE.biZhongshuFill,
@@ -136,6 +166,7 @@ export function createCachedPixelFn(
 export function buildChanlunOverlayCache(params: {
   dates: string[]
   seriesKlines: KLine[]
+  inclusions?: KLineInclusion[]
   bis: Bi[]
   biZhongshus?: Zhongshu[]
   xiangs?: XiangSegment[]
@@ -149,6 +180,7 @@ export function buildChanlunOverlayCache(params: {
   const {
     dates,
     seriesKlines,
+    inclusions = [],
     bis,
     biZhongshus = [],
     xiangs,
@@ -162,8 +194,23 @@ export function buildChanlunOverlayCache(params: {
   const nBar = dates.length
   const refPx = seriesKlines.length > 0 ? seriesKlines[seriesKlines.length - 1].close : 1
   const dateLookup = buildDateLookup(dates)
+  const divergenceSource = aiSignal?.divergences?.length
+    ? aiSignal.divergences
+    : (aiSignal?.divergence ? [aiSignal.divergence] : [])
 
   return {
+    inclusions: flags.inclusions ? inclusions.flatMap(item => {
+      const r = resolveBarRange(item.start, item.end, nBar, dates, dateLookup)
+      return r ? [{ ...item, _s: r[0], _e: r[1] }] : []
+    }) : [],
+    divergences: flags.divergences ? divergenceSource.flatMap(item => {
+      const idx = dateToIdxRobust(item.datetime, dates, dateLookup)
+      if (idx < 0) return []
+      const previousIdx = item.previous_datetime
+        ? dateToIdxRobust(item.previous_datetime, dates, dateLookup)
+        : -1
+      return [{ ...item, _idx: idx, ...(previousIdx >= 0 ? { _previousIdx: previousIdx } : {}) }]
+    }) : [],
     bis: flags.bis ? bis.flatMap(b => {
       const r = resolveBarRange(b.start, b.end, nBar, dates, dateLookup)
       return r ? [{ ...b, _s: r[0], _e: r[1] }] : []
@@ -208,8 +255,51 @@ export function buildChanlunGraphicChildren(ctx: {
   const pixelAtIdxCached = createCachedPixelFn(ctx.pixelAtIdx)
   const priceAt = ctx.priceAtIdx ?? (() => 0)
   const children: GraphicElement[] = []
+  const inclusionColor = theme.inclusionColor ?? '#8B86A8'
 
-  const { bis, biZhongshus, xiangs, zhongshus, signals, aiSignal, supportResistance, dualCrossIndices } = data
+  const { inclusions, divergences, bis, biZhongshus, xiangs, zhongshus, signals, aiSignal, supportResistance, dualCrossIndices } = data
+
+  // 包含关系只画 1px 细括号；两根合并不加文字，避免主图变拥挤。
+  for (const item of inclusions) {
+    if (item._e < viewS || item._s > viewE || item._e < item._s) continue
+    const a = pixelAtIdxCached(item._s, item.high)
+    const b = pixelAtIdxCached(item._e, item.high)
+    if (!a || !b) continue
+    const x1 = Math.min(a[0], b[0])
+    const x2 = Math.max(a[0], b[0])
+    const y = Math.min(a[1], b[1]) - 4
+    const capY = y - 3
+    children.push({
+      type: 'polyline',
+      shape: { points: [[x1, y], [x1, capY], [x2, capY], [x2, y]] },
+      style: {
+        stroke: inclusionColor,
+        fill: null,
+        lineWidth: 1,
+        opacity: 0.62,
+        lineDash: item.direction === 'down' ? [2, 2] : undefined,
+      },
+      z: 101,
+      silent: true,
+    })
+    if (item.count >= 3 && x2 - x1 >= 16) {
+      children.push({
+        type: 'text',
+        style: {
+          x: (x1 + x2) / 2,
+          y: capY - 2,
+          text: `含${item.count}`,
+          fill: inclusionColor,
+          font: `8px ${theme.labelFont}`,
+          align: 'center',
+          verticalAlign: 'bottom',
+          opacity: 0.72,
+        },
+        z: 101,
+        silent: true,
+      })
+    }
+  }
 
   const appendZhongshuRects = (
     items: IndexedRange<Zhongshu>[],
@@ -227,6 +317,73 @@ export function buildChanlunGraphicChildren(ctx: {
       const xPx2 = Math.max(a[0], b[0])
       const yPx1 = Math.min(a[1], b[1])
       const yPx2 = Math.max(a[1], b[1])
+      const expanded = zs.status === 'expanded'
+      const statusLabel = zs.status === 'extended'
+          ? '延伸'
+          : zs.status === 'completed'
+            ? '完成'
+            : '形成'
+
+      if (expanded) {
+        // 高一级扩张中枢常跨越很长区间。完整矩形会遮挡 K 线并与子中枢叠成色块，
+        // 因此只画四个角标来保留时间/价格边界，不填充、不重复标注上下沿价格。
+        const width = Math.max(xPx2 - xPx1, 4)
+        const height = Math.max(yPx2 - yPx1, 1)
+        const cornerX = Math.min(18, Math.max(7, width * 0.08))
+        const cornerY = Math.min(14, Math.max(6, height * 0.12))
+        const corners: [number, number][][] = [
+          [[xPx1, yPx1 + cornerY], [xPx1, yPx1], [xPx1 + cornerX, yPx1]],
+          [[xPx2 - cornerX, yPx1], [xPx2, yPx1], [xPx2, yPx1 + cornerY]],
+          [[xPx1, yPx2 - cornerY], [xPx1, yPx2], [xPx1 + cornerX, yPx2]],
+          [[xPx2 - cornerX, yPx2], [xPx2, yPx2], [xPx2, yPx2 - cornerY]],
+        ]
+        for (const points of corners) {
+          children.push({
+            type: 'polyline',
+            shape: { points },
+            style: {
+              stroke,
+              fill: null,
+              lineWidth: 1.35,
+              lineDash: [5, 4],
+              opacity: 0.72,
+              lineJoin: 'round',
+            },
+            z: z - 2,
+            silent: true,
+          })
+        }
+        if (width >= 30) {
+          const expansionLabel = zs.expansion_type === 'nine_structure'
+            ? `9结构升L${zs.level ?? (dashed ? 2 : 3)}`
+            : zs.expansion_type === 'center_overlap'
+              ? `同级叠升L${zs.level ?? (dashed ? 2 : 3)}`
+              : `扩L${zs.level ?? (dashed ? 2 : 3)}`
+          children.push({
+            type: 'text',
+            style: {
+              x: xPx2 - 3,
+              y: yPx1 + 3,
+              text: expansionLabel,
+              fill: stroke,
+              fontSize: theme.zsLabelFontSize,
+              fontWeight: 650,
+              fontFamily: theme.labelFont,
+              align: 'right',
+              verticalAlign: 'top',
+              opacity: 0.82,
+              backgroundColor: theme.overlayLabelBackground ?? 'rgba(255,255,255,0.88)',
+              borderColor: stroke,
+              borderWidth: 0.7,
+              borderRadius: 2,
+              padding: [1, 3],
+            },
+            z: z - 1,
+            silent: true,
+          })
+        }
+        continue
+      }
       children.push({
         type: 'rect',
         shape: { x: xPx1, y: yPx1, width: Math.max(xPx2 - xPx1, 4), height: Math.max(yPx2 - yPx1, 1) },
@@ -235,15 +392,21 @@ export function buildChanlunGraphicChildren(ctx: {
           stroke,
           lineWidth: dashed ? 1 : 1.35,
           lineDash: dashed || zs.confirmed === false ? [6, 4] : undefined,
+          opacity: 0.9,
         },
         z, silent: true,
       })
       children.push({
         type: 'text',
         style: {
-          text: `${zs.range_high.toFixed(2)} / ${zs.range_low.toFixed(2)}`,
+          text: `L${zs.level ?? (dashed ? 1 : 2)}·${statusLabel}${
+            zs.status === 'extended' && (zs.structure_count ?? 0) > 3
+              ? `·${zs.structure_count}${zs.source_type === 'bi' ? '笔' : '段'}`
+              : ''
+          } ${zs.range_high.toFixed(2)} / ${zs.range_low.toFixed(2)}`,
           fill: stroke,
           fontSize: theme.zsLabelFontSize,
+          fontWeight: 500,
           fontFamily: theme.labelFont,
         },
         x: xPx1 + 4, y: yPx1 + 12,
@@ -311,6 +474,77 @@ export function buildChanlunGraphicChildren(ctx: {
   // 笔统一使用电光蓝连续折线；线段使用更粗的橙色，避免和涨跌 K 线混淆。
   appendStructurePolylines(bis, theme.biColor, 1.7, 102)
   appendStructurePolylines(xiangs, theme.segmentColor, 2.8, 103)
+
+  // 类型用形状/色系区分：趋势=实心圆，盘整=菱形，力度背离=空心圆；上下位置表示顶/底。
+  const divergenceStacks = new Map<string, number>()
+  for (const div of divergences) {
+    if (div._idx < viewS || div._idx > viewE) continue
+    const anchor = pixelAtIdxCached(div._idx, div.price)
+    if (!anchor) continue
+    const isTop = div.type === 'top'
+    const chanType = divergenceChanType(div)
+    const color = chanType === 'trend'
+      ? (isTop ? (theme.divergenceTopColor ?? '#F97373') : (theme.divergenceBottomColor ?? '#34D399'))
+      : chanType === 'consolidation'
+        ? (isTop ? (theme.divergenceConsolidationTopColor ?? '#F59E0B') : (theme.divergenceConsolidationBottomColor ?? '#14B8A6'))
+        : (isTop ? (theme.divergenceMomentumTopColor ?? '#C084FC') : (theme.divergenceMomentumBottomColor ?? '#60A5FA'))
+    const stackKey = `${div._idx}:${div.type}`
+    const stackIndex = divergenceStacks.get(stackKey) ?? 0
+    divergenceStacks.set(stackKey, stackIndex + 1)
+    const markerY = anchor[1] + (isTop ? -1 : 1) * (12 + stackIndex * 13)
+    children.push({
+      type: 'line',
+      shape: { x1: anchor[0], y1: anchor[1], x2: anchor[0], y2: markerY },
+      style: {
+        stroke: color,
+        lineWidth: 1,
+        opacity: chanType === 'momentum' ? 0.6 : 0.78,
+        lineDash: chanType === 'momentum' ? [2, 2] : undefined,
+      },
+      z: 104,
+      silent: true,
+    })
+    if (chanType === 'consolidation') {
+      children.push({
+        type: 'polygon',
+        shape: { points: [[anchor[0], markerY - 5], [anchor[0] + 5, markerY], [anchor[0], markerY + 5], [anchor[0] - 5, markerY]] },
+        style: { fill: color, stroke: theme.strokeBg, lineWidth: 1.1, opacity: 0.95 },
+        z: 104,
+        silent: true,
+      })
+    } else {
+      children.push({
+        type: 'circle',
+        shape: { cx: anchor[0], cy: markerY, r: chanType === 'trend' ? 4.5 : 4 },
+        style: {
+          fill: chanType === 'momentum' ? theme.strokeBg : color,
+          stroke: color,
+          lineWidth: chanType === 'momentum' ? 1.5 : 1.2,
+          opacity: 0.94,
+        },
+        z: 104,
+        silent: true,
+      })
+    }
+    children.push({
+      type: 'text',
+      style: {
+        x: anchor[0] + 6,
+        y: markerY,
+        text: divergenceCompactLabel(div),
+        fill: color,
+        font: `9px ${theme.labelFont}`,
+        verticalAlign: 'middle',
+        backgroundColor: theme.overlayLabelBackground ?? 'rgba(255,255,255,0.88)',
+        borderColor: color,
+        borderWidth: 0.7,
+        borderRadius: 2,
+        padding: [1, 3],
+      },
+      z: 104,
+      silent: true,
+    })
+  }
 
   for (const sig of signals) {
     if (sig._idx < viewS || sig._idx > viewE) continue

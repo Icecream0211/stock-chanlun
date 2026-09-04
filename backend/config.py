@@ -49,6 +49,10 @@ CUSTOM_LLM_MODEL_ID: str = os.environ.get("CUSTOM_LLM_MODEL_ID", "").strip() or 
 # 选股缠论并发（默认 12，可通过环境变量调低以减轻行情源压力）
 SCREENING_WORKERS: int = max(1, min(32, int(os.environ.get("SCREENING_WORKERS", "12") or "12")))
 
+# 笔兼容模式：new=后期新笔（默认），old=旧笔，simple/fractal=工程兼容。
+_bi_mode = os.environ.get("CHANLUN_BI_MODE", "new").strip().lower()
+CHANLUN_BI_MODE: str = _bi_mode if _bi_mode in {"new", "old", "simple", "fractal"} else "new"
+
 # A 股行情源优先级。ifind 不可用时自动继续下一个源；legacy 为腾讯/新浪现有实现。
 MARKET_DATA_SOURCES: tuple[str, ...] = _csv_values("MARKET_DATA_SOURCES", "ifind,legacy")
 
@@ -63,6 +67,19 @@ IFIND_ENABLED: bool = _truthy(
         (IFIND_USERNAME and IFIND_PASSWORD)
         or IFIND_REFRESH_TOKEN
         or IFIND_ACCESS_TOKEN
+    ),
+)
+
+# iFinD Streamable HTTP MCP（与 QuantAPI token 相互独立，仅作为首页/搜索最终兜底）。
+IFIND_MCP_AUTH_TOKEN: str = os.environ.get("IFIND_MCP_AUTH_TOKEN", "").strip()
+IFIND_MCP_STOCK_URL: str = os.environ.get("IFIND_MCP_STOCK_URL", "").strip()
+IFIND_MCP_NEWS_URL: str = os.environ.get("IFIND_MCP_NEWS_URL", "").strip()
+IFIND_MCP_INDEX_URL: str = os.environ.get("IFIND_MCP_INDEX_URL", "").strip()
+IFIND_MCP_ENABLED: bool = _truthy(
+    "IFIND_MCP_ENABLED",
+    default=bool(
+        IFIND_MCP_AUTH_TOKEN
+        and (IFIND_MCP_STOCK_URL or IFIND_MCP_NEWS_URL or IFIND_MCP_INDEX_URL)
     ),
 )
 

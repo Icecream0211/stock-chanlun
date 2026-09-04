@@ -5,7 +5,7 @@ import { ref } from 'vue'
 import { stockApi } from '@/api/stock'
 import { peekApiCache } from '@/utils/apiCache'
 
-export type StockSearchHit = { code: string; name: string }
+export type StockSearchHit = { code: string; name: string; instrument_id?: string | null }
 
 type SearchPayload = { data: { stocks?: StockSearchHit[] } }
 

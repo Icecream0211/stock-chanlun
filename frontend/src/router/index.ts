@@ -43,7 +43,7 @@ const router = createRouter({
 
 router.beforeEach(to => {
   const code = typeof to.params.code === 'string' ? to.params.code : ''
-  if (/^\d{6}$/.test(code) && (to.path.startsWith('/stock/') || to.path.startsWith('/m/stock/'))) {
+  if (/^(?:(?:sh|sz|bj))?\d{6}$/i.test(code) && (to.path.startsWith('/stock/') || to.path.startsWith('/m/stock/'))) {
     prefetchStockRouteChunks()
     const dailyKey = chanlunPrefetchKey(code)
     if (!peekApiCache(dailyKey)) prefetchStockChanlun(code)

@@ -88,8 +88,12 @@ class StrategyEngine:
 
         base = signal.confidence
 
-        # 背驰加持 +15%
-        if self.divergence and self.divergence.get('probability', 0) > 0.7:
+        # 只有满足中枢结构定义的趋势/盘整背驰才加持；指标力度背离只作提示。
+        if (
+            self.divergence
+            and self.divergence.get("strict_chan") is True
+            and self.divergence.get('match_score', self.divergence.get('probability', 0)) > 0.7
+        ):
             base = min(1.0, base + 0.15)
 
         # 多中枢震荡降低置信度
@@ -118,8 +122,12 @@ class StrategyEngine:
             if last_zs.range_low <= self.current_price <= last_zs.range_high:
                 risk *= 0.8
 
-        # 背驰信号降低风险
-        if self.divergence and self.divergence.get('probability', 0) > 0.7:
+        # 标准结构背驰降低风险；力度背离不能等价处理。
+        if (
+            self.divergence
+            and self.divergence.get("strict_chan") is True
+            and self.divergence.get('match_score', self.divergence.get('probability', 0)) > 0.7
+        ):
             risk = min(1.0, risk + 0.1)
 
         if risk >= 0.75:
@@ -210,8 +218,16 @@ class StrategyEngine:
                 extras.append("KDJ")
             osc = f" {'/'.join(extras)}确认" if extras else ""
             mf_suffix = f"({mf_cn})" if mf_cn else ""
+            div_name = div.get("chan_type_label") or (
+                "背驰" if div.get("strict_chan") else "力度背离"
+            )
+            grade = div.get("evidence_grade")
+            level_label = div.get("level_label")
+            detail = " ".join(v for v in [level_label, f"证据{grade}" if grade else ""] if v)
+            match_score = div.get('match_score', div.get('probability', 0))
             parts.append(
-                f"背驰概率: {div.get('probability', 0):.0%}{mf_suffix}{osc}"
+                f"{div_name}: 规则匹配{match_score:.0%}"
+                f"{f' {detail}' if detail else ''}{mf_suffix}{osc}"
             )
 
         if self.zhongshus:

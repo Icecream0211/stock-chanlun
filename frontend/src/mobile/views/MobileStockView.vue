@@ -14,7 +14,7 @@
       <div class="stock-header card">
         <div class="sh-left">
           <div class="sh-name">{{ headerQuote?.name || stockCode }}</div>
-          <div class="sh-code mono">{{ stockCode }}</div>
+          <div class="sh-code mono">{{ displayCode }}</div>
         </div>
         <div class="sh-right">
           <div class="sh-price mono">{{ headerQuote?.price != null ? headerQuote.price.toFixed(2) : '—' }}</div>
@@ -25,6 +25,7 @@
       <div class="chart-section">
         <MobileKLineChart
           :klines="store.klines"
+          :inclusions="store.chanlunResult?.inclusions || []"
           :bis="store.chanlunResult?.bis || []"
           :bi-zhongshus="store.chanlunResult?.bi_zhongshus || []"
           :xiangs="store.chanlunResult?.xiangs || []"
@@ -105,7 +106,7 @@
           </svg>
           刷新
         </button>
-        <button class="btn" :class="isWatching ? 'btn-danger' : 'btn-primary'" @click="toggleWatch">
+        <button v-if="!isIndexInstrument" class="btn" :class="isWatching ? 'btn-danger' : 'btn-primary'" @click="toggleWatch">
           {{ isWatching ? '取消自选' : '+自选' }}
         </button>
       </div>
@@ -192,6 +193,8 @@ const onZoomChange = useDebouncedCallback((s: number, e: number) => {
 }, 80)
 
 const stockCode = computed(() => route.params.code as string)
+const displayCode = computed(() => stockCode.value.replace(/^(sh|sz|bj)/i, ''))
+const isIndexInstrument = computed(() => /^(sh|sz)\d{6}$/i.test(stockCode.value))
 const { levelTrends } = useMultiLevelTrends(
   stockCode,
   MULTI_LEVEL_TREND_LEVELS,

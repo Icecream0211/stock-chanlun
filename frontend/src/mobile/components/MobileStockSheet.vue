@@ -107,6 +107,29 @@
                 </div>
               </div>
               <p v-else class="tab-empty">暂无缠论信号</p>
+
+              <div v-if="aiSignal?.decision_guard?.applied" class="sheet-counter-trend-guard">
+                <strong>{{ counterTrendGuardTitle }}</strong>
+                <span>{{ aiSignal.decision_guard.reason }}</span>
+              </div>
+
+              <div v-if="mobileDivergences.length" class="sheet-divergences">
+                <div class="sheet-div-title">背驰与力度检测</div>
+                <p class="sheet-div-help">趋势＝至少两个同级中枢；盘整＝单中枢第一/第三段；力度＝仅指标预警。L1/L2 是笔/线段层级，A/B/C 是证据等级；百分比是规则匹配度，不是涨跌成功率。</p>
+                <div v-for="(div, idx) in mobileDivergences" :key="`${div.datetime}-${idx}`" class="sheet-div-row">
+                  <div class="sheet-div-head">
+                    <span :class="divergenceKindClass(div)">
+                      {{ divergenceTypeLabel(div) }}
+                    </span>
+                    <span class="mono">匹配 {{ (divergenceMatchScore(div) * 100).toFixed(0) }}%</span>
+                  </div>
+                  <div class="sheet-div-meta">{{ divergenceLevelLabel(div) }} · {{ divergenceEvidenceLabel(div) }} · {{ divergenceFactors(div) }}</div>
+                  <div class="sheet-div-location mono">{{ formatDivergenceLocation(div) }}</div>
+                  <div class="sheet-div-desc">{{ div.description }}</div>
+                  <div v-if="div.turn_scope" class="sheet-div-scope">{{ div.turn_scope }}</div>
+                </div>
+                <p class="sheet-div-large">小背驰推断大转折，还必须等待末个次级别中枢三卖/三买确认。</p>
+              </div>
             </div>
 
             <!-- AI策略 Tab -->
@@ -128,11 +151,17 @@
 
 <script setup lang="ts">
 import { ref, computed, defineAsyncComponent } from 'vue'
-import type { Quote, StockInfoFields, Signal, AISignal } from '@/api/stock'
+import type { Quote, StockInfoFields, Signal, AISignal, DivergenceSignal } from '@/api/stock'
 import { useCommentStore } from '@/stores/comment'
 import { useVolumeFormatter } from '@/composables/useFormatters'
 import type { LevelTrendChip } from '@/composables/useMultiLevelTrends'
 import MultiLevelTrendChips from '@/components/Signal/MultiLevelTrendChips.vue'
+import {
+  divergenceChanType,
+  divergenceEvidenceLabel,
+  divergenceLevelLabel,
+  divergenceTypeLabel,
+} from '@/utils/divergencePresentation'
 
 const MobileCommentSection = defineAsyncComponent(
   () => import('./MobileCommentSection.vue'),
@@ -160,6 +189,38 @@ defineEmits<{
 const commentStore = useCommentStore()
 const { formatVolume, formatAmount } = useVolumeFormatter()
 const commentCount = computed(() => commentStore.getComments(props.stockCode).length)
+const mobileDivergences = computed<DivergenceSignal[]>(() => {
+  const rows = props.aiSignal?.divergences?.length
+    ? props.aiSignal.divergences
+    : (props.aiSignal?.divergence ? [props.aiSignal.divergence] : [])
+  return rows.slice(-3).reverse()
+})
+
+function divergenceFactors(div: DivergenceSignal): string {
+  const factors = div.confirmations?.length
+    ? div.confirmations
+    : ['MACD', ...(div.rsi_confirm ? ['RSI'] : []), ...(div.kdj_confirm ? ['KDJ'] : [])]
+  return factors.join(' + ')
+}
+
+function divergenceKindClass(div: DivergenceSignal): string {
+  return `sheet-div-${divergenceChanType(div)}-${div.type}`
+}
+
+function divergenceMatchScore(div: DivergenceSignal): number {
+  return div.match_score ?? div.probability ?? 0
+}
+
+const counterTrendGuardTitle = computed(() =>
+  props.aiSignal?.decision_guard?.mode === 'counter_trend_pullback'
+    ? '逆势回调观察'
+    : '逆势反弹观察',
+)
+
+function formatDivergenceLocation(div: DivergenceSignal): string {
+  const date = String(div.datetime || div.end || '').replace('T', ' ').slice(0, 16)
+  return `${date || '位置未知'} @ ${Number(div.price).toFixed(2)}`
+}
 
 const tabs = [
   { key: 'quote', label: '行情' },
@@ -422,6 +483,37 @@ const infoRows = computed(() => {
   font-size: 0.72rem;
   color: var(--text-muted);
 }
+
+.sheet-divergences { margin-top: 14px; padding: 12px; border: 1px solid rgba(232,121,249,0.2); border-radius: 10px; background: rgba(232,121,249,0.05); }
+.sheet-counter-trend-guard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  color: var(--accent-amber);
+  background: rgba(210,153,34,0.08);
+  border: 1px solid rgba(210,153,34,0.24);
+  border-radius: 10px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.sheet-counter-trend-guard span { color: var(--text-secondary); }
+.sheet-div-title { font-size: 0.82rem; font-weight: 700; color: var(--accent-purple); }
+.sheet-div-help { margin: 4px 0 8px; font-size: 0.68rem; color: var(--text-muted); line-height: 1.4; }
+.sheet-div-row { padding: 8px 0; border-top: 1px dashed rgba(232,121,249,0.16); }
+.sheet-div-head { display: flex; align-items: center; gap: 7px; font-size: 0.7rem; }
+.sheet-div-trend-top { color: #f43f5e; font-weight: 700; }
+.sheet-div-trend-bottom { color: #10b981; font-weight: 700; }
+.sheet-div-consolidation-top { color: #f59e0b; font-weight: 700; }
+.sheet-div-consolidation-bottom { color: #14b8a6; font-weight: 700; }
+.sheet-div-momentum-top { color: #c084fc; font-weight: 700; }
+.sheet-div-momentum-bottom { color: #60a5fa; font-weight: 700; }
+.sheet-div-meta { margin-top: 4px; color: var(--text-muted); font-size: 0.64rem; }
+.sheet-div-location { margin-top: 4px; font-size: 0.68rem; color: var(--text-secondary); }
+.sheet-div-desc { margin-top: 3px; font-size: 0.72rem; color: var(--text-muted); line-height: 1.4; }
+.sheet-div-scope { margin-top: 3px; font-size: 0.66rem; color: var(--text-muted); line-height: 1.4; }
+.sheet-div-large { margin: 7px 0 0; padding-top: 7px; border-top: 1px solid rgba(232,121,249,0.12); font-size: 0.65rem; color: var(--text-muted); line-height: 1.4; }
 
 /* ── AI ── */
 .ai-card { padding: 16px; display: flex; flex-direction: column; gap: 12px; }

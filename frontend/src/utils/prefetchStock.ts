@@ -38,7 +38,7 @@ export function multiLevelPrefetchKey(code: string, levels = MULTI_LEVEL_TREND_L
 }
 
 function isStockCode(code: string) {
-  return /^\d{6}$/.test(code.trim())
+  return /^(?:(?:sh|sz|bj))?\d{6}$/i.test(code.trim())
 }
 
 /** 预取缠论（含 K 线）；已缓存或进行中则跳过 */

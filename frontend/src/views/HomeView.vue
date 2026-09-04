@@ -35,8 +35,8 @@
                 v-for="item in liveResults"
                 :key="item.code"
                 class="live-item"
-                v-bind="stockLinkPrefetchHandlers(item.code)"
-                @mousedown.prevent="keyword = item.code; search()"
+                v-bind="stockLinkPrefetchHandlers(item.instrument_id || item.code)"
+                @mousedown.prevent="goToStock(item.instrument_id || item.code)"
               >
                 <span class="live-name">{{ item.name }}</span>
                 <span class="live-code mono">{{ item.code }}</span>
@@ -116,8 +116,8 @@
               :key="stock.code"
               class="stock-card card"
               :style="{ height: SEARCH_ROW_H + 'px' }"
-              @click="goToStock(stock.code)"
-              v-bind="stockLinkPrefetchHandlers(stock.code)"
+              @click="goToStock(stock.instrument_id || stock.code)"
+              v-bind="stockLinkPrefetchHandlers(stock.instrument_id || stock.code)"
             >
               <div class="stock-info">
                 <span class="stock-code mono">{{ stock.code }}</span>
@@ -136,8 +136,8 @@
             v-for="stock in searchDisplay"
             :key="stock.code"
             class="stock-card card"
-            @click="goToStock(stock.code)"
-            v-bind="stockLinkPrefetchHandlers(stock.code)"
+            @click="goToStock(stock.instrument_id || stock.code)"
+            v-bind="stockLinkPrefetchHandlers(stock.instrument_id || stock.code)"
           >
             <div class="stock-info">
               <span class="stock-code mono">{{ stock.code }}</span>
@@ -184,6 +184,11 @@
                 :key="key"
                 class="index-card"
                 :class="ix.change_pct >= 0 ? 'card-up' : 'card-down'"
+                role="link"
+                tabindex="0"
+                @click="goToStock(ix.instrument_id || ix.code)"
+                @keydown.enter="goToStock(ix.instrument_id || ix.code)"
+                v-bind="stockLinkPrefetchHandlers(ix.instrument_id || ix.code)"
               >
                 <div class="idx-top">
                   <span class="idx-name">{{ ix.name }}</span>
@@ -422,7 +427,7 @@ const AUTO_REFRESH_INTERVAL = 5 * 60 * 1000 // 5 minutes
 
 const router = useRouter()
 const keyword = ref('')
-const results = ref<{ code: string; name: string }[]>([])
+const results = ref<{ code: string; name: string; instrument_id?: string | null }[]>([])
 const searching = ref(false)
 const searchError = ref('')
 function loadSearchHistory(): string[] {
@@ -813,7 +818,9 @@ onUnmounted(() => {
   border-radius: 10px;
   border: 1px solid var(--border);
   transition: border-color 0.15s;
+  cursor: pointer;
 }
+.index-card:hover { border-color: var(--accent-blue); }
 .card-up { border-left: 3px solid var(--accent-red); background: rgba(239,68,68,0.04); }
 .card-down { border-left: 3px solid var(--accent-green); background: rgba(34,197,94,0.04); }
 .idx-top { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }

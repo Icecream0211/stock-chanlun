@@ -7,7 +7,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from chanlun.elements import Bi, BuySellPoint, Zhongshu
+from chanlun.elements import Bi, BuySellPoint, XiangSegment, Zhongshu
 from chanlun.signals import SignalDetector
 
 
@@ -28,6 +28,42 @@ class SignalDetectorTests(unittest.TestCase):
             start_price=low if direction == "up" else high,
             end_price=high if direction == "up" else low,
         )
+
+    def _segment(self, idx: int, direction: str, start_minutes: int, end_minutes: int, high: float, low: float) -> XiangSegment:
+        start = self.t0 + timedelta(minutes=start_minutes)
+        end = self.t0 + timedelta(minutes=end_minutes)
+        return XiangSegment(
+            id=f"x_{idx}", start=start, end=end, direction=direction,
+            high=high, low=low,
+            start_price=low if direction == "up" else high,
+            end_price=high if direction == "up" else low,
+            bi_ids=[f"b_{idx}_1", f"b_{idx}_2", f"b_{idx}_3"],
+        )
+
+    def test_first_sell_requires_two_progressive_centers(self):
+        incoming = self._segment(1, "up", 0, 10, 12, 10)
+        outgoing = self._segment(2, "up", 40, 60, 13, 12)
+        detector = SignalDetector(
+            bis=[], segments=[incoming, outgoing], zhongshus=[], level="daily"
+        )
+        self.assertEqual(detector._detect_1st_sell(), [])
+
+        detector.zhongshus = [
+            Zhongshu(
+                id="zs1", start=self.t0 + timedelta(minutes=12), end=self.t0 + timedelta(minutes=20),
+                range_high=11, range_low=10, xiang_ids=["a", "b", "c"],
+                level=2, source_type="segment", status="completed", exit_direction="up",
+            ),
+            Zhongshu(
+                id="zs2", start=self.t0 + timedelta(minutes=30), end=self.t0 + timedelta(minutes=40),
+                range_high=12, range_low=11.2, xiang_ids=["d", "e", "f"],
+                level=2, source_type="segment", status="completed", exit_direction="up",
+            ),
+        ]
+        signals = detector._detect_1st_sell()
+        self.assertEqual(len(signals), 1)
+        self.assertEqual(signals[0].type, "一卖")
+        self.assertIn("两个同级中枢上移", signals[0].description)
 
     def test_detect_2nd_buy_uses_bi_end_time_after_first_buy(self):
         detector = SignalDetector(bis=[], segments=[], zhongshus=[], level="daily")

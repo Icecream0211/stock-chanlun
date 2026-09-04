@@ -82,7 +82,7 @@ export function useMultiLevelTrends(
 
   async function fetchTrends(force = false) {
     const code = toValue(stockCode).trim()
-    if (!code || !/^\d{6}$/.test(code)) {
+    if (!code || !/^(?:(?:sh|sz|bj))?\d{6}$/i.test(code)) {
       levelTrends.value = []
       return
     }

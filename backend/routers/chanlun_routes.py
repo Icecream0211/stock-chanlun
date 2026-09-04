@@ -127,21 +127,130 @@ def _ai_signal_cache_key(code: str, level: str, model: str, use_llm: bool) -> st
     return f"ai:{code}:{level}:{model}:{'llm' if use_llm else 'rule'}"
 
 
+def _apply_counter_trend_guard(
+    payload: dict,
+    *,
+    trend: str,
+    divergence: dict | None,
+    resonance: dict | None,
+    signals: list,
+) -> dict:
+    """低证据逆势背驰只能作为反弹/回调观察，不能直接升级为交易建议。"""
+    guarded = dict(payload)
+    default_guard = {
+        "applied": False,
+        "mode": None,
+        "original_direction": payload.get("direction"),
+        "reason": None,
+    }
+    if not divergence:
+        guarded["decision_guard"] = default_guard
+        return guarded
+
+    grade = divergence.get("evidence_grade")
+    chan_type = divergence.get("chan_type")
+    weak_structure = grade == "C" and chan_type in {"consolidation", "momentum"}
+    oscillator_confirmed = bool(
+        divergence.get("rsi_confirm") or divergence.get("kdj_confirm")
+    )
+    trend_rows = (resonance or {}).get("trends") or []
+    down_count = sum(1 for item in trend_rows if item.get("trend") == "下跌")
+    up_count = sum(1 for item in trend_rows if item.get("trend") == "上涨")
+    bearish_background = trend == "下跌" and (
+        down_count >= 2 or (resonance or {}).get("direction") == "卖出"
+    )
+    bullish_background = trend == "上涨" and (
+        up_count >= 2 or (resonance or {}).get("direction") == "买入"
+    )
+
+    div_time = str(divergence.get("datetime") or "")
+
+    def has_point(point_type: str) -> bool:
+        for signal in signals:
+            signal_type = signal.get("type") if isinstance(signal, dict) else signal.type
+            signal_time = signal.get("datetime") if isinstance(signal, dict) else signal.datetime
+            if signal_type == point_type and (not div_time or str(signal_time) >= div_time):
+                return True
+        return False
+
+    direction = payload.get("direction")
+    bottom_counter = (
+        direction == "买入"
+        and divergence.get("type") == "bottom"
+        and bearish_background
+        and not has_point("三买")
+    )
+    top_counter = (
+        direction == "卖出"
+        and divergence.get("type") == "top"
+        and bullish_background
+        and not has_point("三卖")
+    )
+    if not weak_structure or oscillator_confirmed or not (bottom_counter or top_counter):
+        guarded["decision_guard"] = default_guard
+        return guarded
+
+    if bottom_counter:
+        mode = "counter_trend_rebound"
+        reason = "多级别仍下跌，当前仅C级盘整背驰/力度背离，降级为反弹观察；等待RSI/KDJ、趋势转强或三买确认"
+    else:
+        mode = "counter_trend_pullback"
+        reason = "多级别仍上涨，当前仅C级盘整背驰/力度背离，降级为回调观察；等待RSI/KDJ、趋势转弱或三卖确认"
+
+    guarded.update({
+        "direction": "观望",
+        "confidence": min(float(payload.get("confidence") or 0), 0.49),
+        "risk_level": "高",
+        "entry_price": None,
+        "stop_loss": None,
+        "take_profit": None,
+        "holding_period": "等待当前级别确认",
+        "description": reason,
+        "decision_guard": {
+            "applied": True,
+            "mode": mode,
+            "original_direction": direction,
+            "reason": reason,
+        },
+    })
+    return guarded
+
+
 def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -> dict:
     """规则策略 + 可选 LLM；供线程池与缓存复用。"""
     df_for_ai, result = get_kline_df_for_ai(code, level)
     current_price = float(result.klines[-1].close) if result.klines else 0.0
 
-    divergence = None
-    if not df_for_ai.empty:
-        try:
-            div_detector = DivergenceDetector(df_for_ai.tail(200))
-            divergence = div_detector.check_divergence(result.bis)
-        except Exception:
-            log.debug("背驰检测失败 code=%s", code, exc_info=True)
-
     classifier = WaveClassifier()
     wave_class = classifier.classify(result.xiangs, result.zhongshus, current_price)
+
+    divergence = None
+    divergences = []
+    if not df_for_ai.empty:
+        try:
+            # 结构可能跨越 200 根以上 K 线，力度比较必须使用完整分析窗口。
+            div_detector = DivergenceDetector(df_for_ai, analysis_level=level)
+            bi_divergences = div_detector.check_divergences(
+                result.bis,
+                centers=result.bi_zhongshus,
+                source_type="bi",
+                structure_level=1,
+                limit=10,
+            )
+            segment_divergences = div_detector.check_divergences(
+                result.xiangs,
+                centers=result.zhongshus,
+                source_type="segment",
+                structure_level=2,
+                limit=10,
+            )
+            divergences = sorted(
+                [*bi_divergences, *segment_divergences],
+                key=lambda item: (item["datetime"], item["structure_level"]),
+            )[-12:]
+            divergence = div_detector.select_primary_divergence(divergences)
+        except Exception:
+            log.debug("背驰检测失败 code=%s", code, exc_info=True)
 
     engine = StrategyEngine(
         signals=result.signals,
@@ -157,23 +266,25 @@ def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -
     resonance = None
     if level == "30min":
         try:
-            daily_key = chanlun_cache_key(code, "daily", DEFAULT_KLINE_LIMIT)
-            daily_result = chanlun_cache.get(daily_key)
-            if daily_result is None:
-                daily_result = run_analysis(code, "daily", kline_limit=DEFAULT_KLINE_LIMIT)
-                chanlun_cache.set(daily_key, daily_result)
-            if daily_result is not None:
-                daily_cls = WaveClassifier().classify(
-                    daily_result.xiangs,
-                    daily_result.zhongshus,
-                    float(daily_result.klines[-1].close) if daily_result.klines else 0.0,
+            level_trends = [{"trend": wave_class["trend"], "level": level}]
+            for higher_level in ("daily", "weekly"):
+                higher_key = chanlun_cache_key(code, higher_level, DEFAULT_KLINE_LIMIT)
+                higher_result = chanlun_cache.get(higher_key)
+                if higher_result is None:
+                    higher_result = run_analysis(
+                        code, higher_level, kline_limit=DEFAULT_KLINE_LIMIT
+                    )
+                    chanlun_cache.set(higher_key, higher_result)
+                if higher_result is None:
+                    continue
+                higher_cls = WaveClassifier().classify(
+                    higher_result.xiangs,
+                    higher_result.zhongshus,
+                    float(higher_result.klines[-1].close) if higher_result.klines else 0.0,
                 )
-                resonance = classifier.multi_level_resonance(
-                    [
-                        {"trend": wave_class, "level": level},
-                        {"trend": daily_cls, "level": "daily"},
-                    ]
-                )
+                level_trends.append({"trend": higher_cls["trend"], "level": higher_level})
+            resonance = classifier.multi_level_resonance(level_trends)
+            resonance["trends"] = level_trends
         except Exception:
             log.debug("多级别共振计算失败 code=%s", code, exc_info=True)
 
@@ -191,6 +302,7 @@ def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -
                 signals=[s.__dict__ for s in result.signals],
                 zhongshus=[z.__dict__ for z in result.zhongshus],
                 bis=[b.__dict__ for b in result.bis],
+                resonance=resonance,
             )
             raw = llm.chat(prompt, system=SYSTEM_PROMPT, temperature=0.3)
             llm_result = parse_llm_response(raw)
@@ -203,19 +315,23 @@ def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -
 
     lr = llm_result if isinstance(llm_result, dict) else None
 
-    return {
+    def llm_or_rule(key: str, rule_value):
+        return lr[key] if lr is not None and key in lr else rule_value
+
+    recommendation = {
         "stock_code": signal.stock_code,
         "level": signal.level,
-        "direction": (lr.get("direction") if lr else None) or signal.direction,
-        "confidence": lr["confidence"] if lr and "confidence" in lr else signal.confidence,
-        "risk_level": (lr.get("risk_level") if lr else None) or signal.risk_level,
-        "entry_price": (lr.get("entry_price") if lr else None) or signal.entry_price,
-        "stop_loss": (lr.get("stop_loss") if lr else None) or signal.stop_loss,
-        "take_profit": (lr.get("take_profit") if lr else None) or signal.take_profit,
-        "holding_period": (lr.get("holding_period") if lr else None) or signal.holding_period,
-        "description": (lr.get("reasoning") if lr else None) or signal.description,
+        "direction": llm_or_rule("direction", signal.direction),
+        "confidence": llm_or_rule("confidence", signal.confidence),
+        "risk_level": llm_or_rule("risk_level", signal.risk_level),
+        "entry_price": llm_or_rule("entry_price", signal.entry_price),
+        "stop_loss": llm_or_rule("stop_loss", signal.stop_loss),
+        "take_profit": llm_or_rule("take_profit", signal.take_profit),
+        "holding_period": llm_or_rule("holding_period", signal.holding_period),
+        "description": llm_or_rule("reasoning", signal.description),
         "trend": wave_class["trend"],
         "divergence": divergence,
+        "divergences": divergences,
         "resonance": resonance,
         "llm": {
             "model": model,
@@ -224,6 +340,13 @@ def build_ai_signal_response(code: str, level: str, model: str, use_llm: bool) -
             "skipped": not use_llm,
         },
     }
+    return _apply_counter_trend_guard(
+        recommendation,
+        trend=wave_class["trend"],
+        divergence=divergence,
+        resonance=resonance,
+        signals=result.signals,
+    )
 
 
 @router.get("/api/chanlun/{code}/ai", tags=["缠论"], summary="AI 策略信号（背驰 + 规则 + 可选 LLM）")

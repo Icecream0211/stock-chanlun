@@ -49,6 +49,24 @@
             <label class="indicator-item">
               <input
                 type="checkbox"
+                :checked="indicators.inclusions"
+                @change="store.toggleIndicator('inclusions')"
+              />
+              <span class="indicator-dot" style="background: #8B86A8"></span>
+              <span>包含K</span>
+            </label>
+            <label class="indicator-item">
+              <input
+                type="checkbox"
+                :checked="indicators.divergences"
+                @change="store.toggleIndicator('divergences')"
+              />
+              <span class="indicator-dot" style="background: #E879F9"></span>
+              <span>背驰</span>
+            </label>
+            <label class="indicator-item">
+              <input
+                type="checkbox"
                 :checked="indicators.bis"
                 @change="store.toggleIndicator('bis')"
               />

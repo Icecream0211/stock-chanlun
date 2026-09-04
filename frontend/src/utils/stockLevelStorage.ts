@@ -28,6 +28,6 @@ export function setStockLevel(code: string, level: LevelOption) {
 /** 从路由 code 解析并读取已记忆的级别 */
 export function resolveStockLevel(code: string): LevelOption | null {
   const trimmed = code.trim()
-  if (!/^\d{6}$/.test(trimmed)) return null
+  if (!/^(?:(?:sh|sz|bj))?\d{6}$/i.test(trimmed)) return null
   return getStockLevel(trimmed)
 }

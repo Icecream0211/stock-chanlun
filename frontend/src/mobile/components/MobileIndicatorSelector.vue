@@ -101,6 +101,8 @@ const mainInds = [
 ]
 
 const chanlunInds = [
+  { key: 'inclusions' as const, label: '包含K', dotStyle: { background: '#8B86A8' } },
+  { key: 'divergences' as const, label: '背驰', dotStyle: { background: '#E879F9' } },
   { key: 'bis' as const, label: '笔', dotStyle: { background: '#2F9BFF' } },
   { key: 'biZhongshus' as const, label: '笔中枢', dotStyle: { background: 'rgba(47,155,255,0.45)', border: '1px dashed #2F9BFF' } },
   { key: 'xiangs' as const, label: '线段', dotStyle: { background: '#FF8C42' } },

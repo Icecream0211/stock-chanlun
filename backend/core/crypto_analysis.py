@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 from chanlun.elements import ChanlunAnalysis
 from chanlun.engine import ChanlunEngine
+from core.chanlun_response import _serialize_zhongshu
 from services.binance_service import get_kline_hist
 from utils import LRUCache
 
@@ -61,6 +62,20 @@ def serialize_crypto_analysis(result: ChanlunAnalysis) -> dict:
             }
             for k in result.klines
         ],
+        "inclusions": [
+            {
+                "start": str(item.start)[:19],
+                "end": str(item.end)[:19],
+                "merged_date": str(item.merged_date)[:19],
+                "direction": item.direction,
+                "count": item.count,
+                "high": item.high,
+                "low": item.low,
+                "high_date": str(item.high_date)[:19],
+                "low_date": str(item.low_date)[:19],
+            }
+            for item in result.inclusions
+        ],
         "bis": [
             {
                 "id": b.id,
@@ -72,31 +87,12 @@ def serialize_crypto_analysis(result: ChanlunAnalysis) -> dict:
                 "start_price": b.start_price,
                 "end_price": b.end_price,
                 "confirmed": b.confirmed,
+                "rule": b.rule,
             }
             for b in result.bis
         ],
-        "zhongshus": [
-            {
-                "id": z.id,
-                "start": str(z.start)[:19],
-                "end": str(z.end)[:19],
-                "range_high": z.range_high,
-                "range_low": z.range_low,
-                "source_type": z.source_type,
-            }
-            for z in result.zhongshus
-        ],
-        "bi_zhongshus": [
-            {
-                "id": z.id,
-                "start": str(z.start)[:19],
-                "end": str(z.end)[:19],
-                "range_high": z.range_high,
-                "range_low": z.range_low,
-                "source_type": z.source_type,
-            }
-            for z in result.bi_zhongshus
-        ],
+        "zhongshus": [_serialize_zhongshu(z) for z in result.zhongshus],
+        "bi_zhongshus": [_serialize_zhongshu(z) for z in result.bi_zhongshus],
         "signals": [
             {
                 "type": s.type,

@@ -7,7 +7,7 @@ from typing import Optional
 
 
 def _format_divergence_for_prompt(divergence: dict) -> str:
-    """将背驰检测结果格式化为模型可读的多行文本"""
+    """将结构类型、级别与指标证据分层格式化，避免模型混淆。"""
     force = divergence.get("macd_force")
     force_cn = {
         "directional": "同向柱累计",
@@ -27,9 +27,17 @@ def _format_divergence_for_prompt(divergence: dict) -> str:
     )
 
     lines = [
-        f"  类型:{divergence.get('type')} 概率:{divergence.get('probability')} "
+        f"  缠论分类:{divergence.get('chan_type_label', '力度背离')} "
+        f"方向:{divergence.get('type')} 标准结构:{_yn(divergence.get('strict_chan'))}",
+        f"  级别:{divergence.get('level_label', '未知')} "
+        f"证据等级:{divergence.get('evidence_grade', '未知')}"
+        "（证据等级不是走势级别）",
+        f"  规则匹配度:{divergence.get('match_score', divergence.get('probability'))} "
+        "（不是未来涨跌成功率） "
         f"MACD力度比:{divergence.get('macd_ratio')} 力度算法:{force_cn}",
         f"  振荡器背离确认:{osc}",
+        f"  结构依据:{divergence.get('theory_note', '')}",
+        f"  转折含义:{divergence.get('turn_scope', '')}",
         f"  描述:{divergence.get('description', '')}",
     ]
     if "price_drop" in divergence:
@@ -43,8 +51,12 @@ SYSTEM_PROMPT = """你是专业的缠论技术分析助手，帮助用户分析�
 
 分析规则：
 1. 只基于用户提供的 K线/缠论数据进行分析，不臆测
-2. 结合背驰、级别共振、中枢位置综合判断；背驰段落中的力度算法与 RSI/KDJ 确认状态须一并参考
-3. 输出结构化 JSON，不要输出多余文字
+2. 严格区分趋势背驰、盘整背驰和指标力度背离；力度背离不得表述为已确认缠论背驰
+3. “走势/结构级别”与“A/B/C证据等级”含义不同，不得混用
+4. 多级别趋势与低级别背驰可以同时存在；逆大级别趋势的 C 级盘整背驰只能视为反弹/回调观察，不得直接给出买入或卖出
+5. 只有 RSI/KDJ 追加确认、当前级别趋势转强/转弱，或出现对应三买/三卖后，才可升级逆势操作建议
+6. 结合中枢位置、力度算法与 RSI/KDJ 追加证据综合判断
+7. 输出结构化 JSON，不要输出多余文字
 
 回复格式（严格 JSON）：
 {
@@ -69,6 +81,7 @@ def build_analysis_prompt(
     signals: list,
     zhongshus: list,
     bis: list,
+    resonance: Optional[dict] = None,
 ) -> str:
     """构造发送给 LLM 的分析 prompt"""
 
@@ -102,6 +115,13 @@ def build_analysis_prompt(
         for s in signals[-5:]:
             sig_text += f"  {s.get('datetime','')} {s.get('type','')} @ {s.get('price','')} ({s.get('description','')})\n"
 
+    resonance_text = "无"
+    if resonance:
+        trends = resonance.get("trends") or []
+        trend_parts = [f"{item.get('level')}:{item.get('trend')}" for item in trends]
+        direction = resonance.get("direction") or "无明确共振"
+        resonance_text = f"{', '.join(trend_parts) or resonance.get('description', '')}；共振方向:{direction}"
+
     prompt = f"""分析股票 {code}（{level}级别），当前趋势：{trend}
 
 【最近30根K线】
@@ -115,6 +135,9 @@ def build_analysis_prompt(
 
 【背驰信号】
 {div_text or '无'}
+
+【多级别趋势背景】
+{resonance_text}
 
 【最近买卖点】
 {sig_text or '无'}

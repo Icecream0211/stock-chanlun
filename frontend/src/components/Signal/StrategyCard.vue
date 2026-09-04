@@ -1,7 +1,12 @@
 <template>
   <div class="card strategy-card">
     <div class="card-header">
-      <span class="card-title">AI 策略建议</span>
+      <div class="title-with-source">
+        <span class="card-title">策略建议</span>
+        <span v-if="signal" class="source-badge" :class="isRuleOnly ? 'source-rule' : 'source-llm'">
+          {{ isRuleOnly ? '规则引擎' : 'LLM 深度分析' }}
+        </span>
+      </div>
       <div class="header-right">
         <span v-if="updatedAt" class="card-time">{{ updatedAt }}</span>
         <button
@@ -27,7 +32,7 @@
     </div>
 
     <div v-else class="strategy-content">
-      <p v-if="isRuleOnly" class="rule-hint">当前为规则引擎结果，可点击「LLM 深度分析」获取大模型解读。</p>
+      <p v-if="isRuleOnly" class="rule-hint">根据笔、线段、中枢、背驰与多级别共振自动计算；未调用大模型。</p>
 
       <!-- Direction -->
       <div class="direction-block" :class="dirClass">
@@ -47,6 +52,11 @@
           </div>
           <span class="conf-pct mono">{{ (signal.confidence * 100).toFixed(0) }}%</span>
         </div>
+      </div>
+
+      <div v-if="signal.decision_guard?.applied" class="counter-trend-guard">
+        <strong>{{ counterTrendGuardTitle }}</strong>
+        <span>{{ signal.decision_guard.reason }}</span>
       </div>
 
       <!-- Price levels -->
@@ -74,15 +84,38 @@
       </div>
 
       <!-- Divergence -->
-      <div v-if="signal.divergence" class="divergence-block">
+      <div v-if="divergenceRows.length" class="divergence-block">
         <div class="divergence-header">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
           </svg>
-          <span>背驰判断</span>
-          <span class="divergence-prob mono">{{ (signal.divergence.probability * 100).toFixed(0) }}%</span>
+          <span>背驰与力度检测</span>
+          <span class="divergence-count">最近 {{ divergenceRows.length }} 处</span>
         </div>
-        <div class="divergence-desc">{{ signal.divergence.description }}</div>
+        <p class="divergence-help">
+          趋势背驰＝至少两个同级中枢；盘整背驰＝单中枢内第一/第三同向段比较；力度背离＝仅价格与指标满足。
+          “日/30分 + L1/L2”是图表周期与笔/线段层级，A/B/C 只是指标证据等级，不是背驰级别；百分比是规则匹配度，不是未来涨跌成功率。
+        </p>
+        <div v-for="(div, index) in divergenceRows" :key="`${div.datetime}-${div.type}-${index}`" class="divergence-row">
+          <div class="divergence-row-head">
+            <span class="divergence-kind" :class="divergenceKindClass(div)">
+              {{ divergenceTypeLabel(div) }}
+            </span>
+            <span class="divergence-prob mono">匹配 {{ (divergenceMatchScore(div) * 100).toFixed(0) }}%</span>
+          </div>
+          <div class="divergence-meta">
+            <span>{{ divergenceLevelLabel(div) }}</span>
+            <span>{{ divergenceEvidenceLabel(div) }}</span>
+            <span>{{ divergenceFactors(div) }}</span>
+          </div>
+          <div class="divergence-location mono">{{ formatDivergenceLocation(div) }}</div>
+          <div class="divergence-desc">{{ div.description }}</div>
+          <div v-if="div.turn_scope" class="divergence-scope">{{ div.turn_scope }}</div>
+          <div v-if="div.previous_price != null && div.macd_ratio != null" class="divergence-compare mono">
+            前值 {{ div.previous_price.toFixed(2) }} → 当前 {{ div.price.toFixed(2) }}；MACD 力度 {{ (div.macd_ratio * 100).toFixed(0) }}%
+          </div>
+        </div>
+        <p class="divergence-large-turn">小级别背驰不自动等于大级别转折；还需末个次级别中枢出现三卖/三买，且该条件仅为必要条件。</p>
       </div>
 
       <!-- Resonance -->
@@ -104,9 +137,15 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { AISignal } from '../../api/stock'
+import type { AISignal, DivergenceSignal } from '../../api/stock'
 import type { LevelTrendChip } from '../../composables/useMultiLevelTrends'
 import MultiLevelTrendChips from './MultiLevelTrendChips.vue'
+import {
+  divergenceChanType,
+  divergenceEvidenceLabel,
+  divergenceLevelLabel,
+  divergenceTypeLabel,
+} from '../../utils/divergencePresentation'
 
 const props = defineProps<{
   signal: AISignal | null
@@ -127,6 +166,33 @@ const showDeepButton = computed(
   () => isRuleOnly.value && !props.loading,
 )
 
+const divergenceRows = computed<DivergenceSignal[]>(() => {
+  const rows = props.signal?.divergences?.length
+    ? props.signal.divergences
+    : (props.signal?.divergence ? [props.signal.divergence] : [])
+  return rows.slice(-3).reverse()
+})
+
+function divergenceFactors(div: DivergenceSignal): string {
+  const factors = div.confirmations?.length
+    ? div.confirmations
+    : ['MACD', ...(div.rsi_confirm ? ['RSI'] : []), ...(div.kdj_confirm ? ['KDJ'] : [])]
+  return factors.join(' + ')
+}
+
+function divergenceKindClass(div: DivergenceSignal): string {
+  return `div-${divergenceChanType(div)}-${div.type}`
+}
+
+function divergenceMatchScore(div: DivergenceSignal): number {
+  return div.match_score ?? div.probability ?? 0
+}
+
+function formatDivergenceLocation(div: DivergenceSignal): string {
+  const date = String(div.datetime || div.end || '').replace('T', ' ').slice(0, 16)
+  return `${date || '位置未知'} @ ${Number(div.price).toFixed(2)}`
+}
+
 const dirClass = computed(() => {
   if (!props.signal) return ''
   if (props.signal.direction === '买入') return 'dir-buy'
@@ -140,6 +206,12 @@ const dirSymbol = computed(() => {
   if (props.signal.direction === '卖出') return '▼'
   return '◆'
 })
+
+const counterTrendGuardTitle = computed(() =>
+  props.signal?.decision_guard?.mode === 'counter_trend_pullback'
+    ? '逆势回调观察'
+    : '逆势反弹观察',
+)
 
 const riskClass = computed(() => {
   if (!props.signal) return ''
@@ -158,6 +230,10 @@ function confColor(c: number) {
 <style scoped>
 .strategy-card { padding: 14px; }
 .card-header { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+.title-with-source { display: flex; align-items: center; gap: 7px; }
+.source-badge { font-size: 0.62rem; padding: 2px 7px; border-radius: 999px; font-weight: 600; }
+.source-rule { color: var(--text-secondary); background: rgba(139,134,168,0.14); border: 1px solid rgba(139,134,168,0.28); }
+.source-llm { color: var(--accent-blue); background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.25); }
 .header-right { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .card-time { font-size: 0.65rem; color: var(--text-muted); font-family: var(--font-mono); }
 
@@ -212,6 +288,20 @@ function confColor(c: number) {
 .dir-confidence { display: flex; align-items: center; gap: 8px; justify-content: center; }
 .conf-pct { font-size: 0.8rem; color: var(--text-secondary); }
 
+.counter-trend-guard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  color: var(--accent-amber);
+  background: rgba(210,153,34,0.08);
+  border: 1px solid rgba(210,153,34,0.24);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+.counter-trend-guard span { color: var(--text-secondary); }
+
 .price-levels { display: flex; flex-direction: column; gap: 6px; }
 .level-row { display: flex; justify-content: space-between; align-items: center; }
 .level-label { font-size: 0.8rem; color: var(--text-secondary); }
@@ -235,8 +325,24 @@ function confColor(c: number) {
   border-radius: 8px;
 }
 .divergence-header { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; font-weight: 600; margin-bottom: 4px; color: var(--accent-blue); }
+.divergence-count { margin-left: auto; color: var(--text-muted); font-size: 0.68rem; font-weight: 500; }
+.divergence-help { margin: 5px 0 8px; color: var(--text-muted); font-size: 0.68rem; line-height: 1.45; }
+.divergence-row { padding: 7px 0; border-top: 1px dashed rgba(88,166,255,0.16); }
+.divergence-row-head { display: flex; align-items: center; gap: 6px; }
+.divergence-kind { font-size: 0.7rem; font-weight: 700; }
+.div-trend-top { color: #f43f5e; }
+.div-trend-bottom { color: #10b981; }
+.div-consolidation-top { color: #f59e0b; }
+.div-consolidation-bottom { color: #14b8a6; }
+.div-momentum-top { color: #c084fc; }
+.div-momentum-bottom { color: #60a5fa; }
 .divergence-prob { color: var(--accent-blue); }
+.divergence-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 4px; color: var(--text-muted); font-size: 0.63rem; }
+.divergence-location { margin-top: 4px; color: var(--text-secondary); font-size: 0.68rem; }
 .divergence-desc { font-size: 0.75rem; color: var(--text-secondary); }
+.divergence-scope { margin-top: 3px; color: var(--text-muted); font-size: 0.66rem; line-height: 1.4; }
+.divergence-compare { margin-top: 3px; color: var(--text-muted); font-size: 0.65rem; }
+.divergence-large-turn { margin: 7px 0 0; padding-top: 7px; border-top: 1px solid rgba(88,166,255,0.12); color: var(--text-muted); font-size: 0.65rem; line-height: 1.45; }
 
 .resonance-block {
   display: flex;

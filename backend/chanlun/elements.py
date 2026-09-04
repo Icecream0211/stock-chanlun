@@ -14,6 +14,19 @@ class KLine(BaseModel):
     amount: Optional[float] = 0.0  # 成交额
 
 
+class KLineInclusion(BaseModel):
+    """包含关系处理记录，用于在原始 K 线图上做轻量提示。"""
+    start: datetime
+    end: datetime
+    merged_date: datetime
+    direction: Literal["up", "down"]
+    count: int
+    high: float
+    low: float
+    high_date: datetime
+    low_date: datetime
+
+
 class Bi(BaseModel):
     """笔 — 缠论最小结构单元"""
     id: str
@@ -25,6 +38,7 @@ class Bi(BaseModel):
     start_price: float  # 笔起点价格
     end_price: float   # 笔终点价格
     confirmed: bool = True  # False 表示随最新 K 线延伸、尚未满足成笔条件的虚拟尾笔
+    rule: Literal["new", "old", "simple", "fractal", "virtual"] = "new"
 
 
 class XiangSegment(BaseModel):
@@ -43,16 +57,27 @@ class XiangSegment(BaseModel):
 
 
 class Zhongshu(BaseModel):
-    """中枢 — 价格重叠区域"""
+    """中枢 — 固定核心区间及其延伸/扩张状态。"""
     id: str
     start: datetime
     end: datetime
-    range_high: float  # 中枢区间最高价
-    range_low: float   # 中枢区间最低价
+    range_high: float  # 固定核心上沿 ZG（兼容既有调用）
+    range_low: float   # 固定核心下沿 ZD（兼容既有调用）
     xiang_ids: list[str]  # 构成该中枢的线段ID
     level: int
     confirmed: bool = True
     source_type: Literal["bi", "segment"] = "segment"
+    zg: Optional[float] = None  # 中枢核心上沿，由初始三结构确定，延伸时不改变
+    zd: Optional[float] = None  # 中枢核心下沿，由初始三结构确定，延伸时不改变
+    gg: Optional[float] = None  # 中枢震荡涉及结构的最高点
+    dd: Optional[float] = None  # 中枢震荡涉及结构的最低点
+    status: Literal["forming", "extended", "completed", "expanded"] = "forming"
+    structure_count: int = 3
+    extension_count: int = 0
+    exit_direction: Optional[Literal["up", "down"]] = None
+    expansion_type: Optional[Literal["nine_structure", "center_overlap"]] = None
+    parent_id: Optional[str] = None
+    child_ids: list[str] = Field(default_factory=list)
 
 
 class MACDData(BaseModel):
@@ -99,6 +124,7 @@ class ChanlunAnalysis(BaseModel):
     stock_code: str
     level: str
     klines: list[KLine]
+    inclusions: list[KLineInclusion] = Field(default_factory=list)
     bis: list[Bi]
     xiangs: list[XiangSegment]
     zhongshus: list[Zhongshu]

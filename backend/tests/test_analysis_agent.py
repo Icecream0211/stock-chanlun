@@ -31,6 +31,8 @@ class FormatDivergencePromptTests(unittest.TestCase):
         self.assertIn("RSI是", text)
         self.assertIn("KDJ否", text)
         self.assertIn("价格下探幅度", text)
+        self.assertIn("规则匹配度", text)
+        self.assertIn("不是未来涨跌成功率", text)
 
     def test_build_analysis_prompt_embeds_formatted_divergence(self):
         div = {
@@ -61,9 +63,18 @@ class FormatDivergencePromptTests(unittest.TestCase):
             signals=[],
             zhongshus=[],
             bis=[],
+            resonance={
+                "direction": "卖出",
+                "trends": [
+                    {"level": "30min", "trend": "下跌"},
+                    {"level": "daily", "trend": "下跌"},
+                ],
+            },
         )
         self.assertIn("绝对值面积", prompt)
         self.assertIn("背驰信号", prompt)
+        self.assertIn("多级别趋势背景", prompt)
+        self.assertIn("30min:下跌", prompt)
 
 
 class ParseLlmResponseTests(unittest.TestCase):

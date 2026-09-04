@@ -45,33 +45,29 @@ class SignalDetector:
     def _detect_1st_buy(self) -> list[BuySellPoint]:
         """
         一买: 下跌趋势的背驰点
-        条件: 连续2个以上向下段，后一段力度 < 前一段力度（背驰）
+        条件: 至少两个同级中枢构成下跌趋势，末中枢向下完成离开，
+        离开段创新低且力度弱于进入末中枢前的同向段。
         """
-        signals = []
-        down_segments = [s for s in self.segments if s.direction == "down"]
-        if len(down_segments) < 2:
-            return signals
-
-        for i in range(1, len(down_segments)):
-            prev = down_segments[i - 1]
-            curr = down_segments[i]
-
-            # 价格创新低但力度（可用高度/时间比近似）减弱
-            if curr.low < prev.low:
-                prev_power = (prev.high - prev.low) / max(1, (prev.end - prev.start).total_seconds())
-                curr_power = (curr.high - curr.low) / max(1, (curr.end - curr.start).total_seconds())
-
-                if curr_power < prev_power * 0.8:  # 力度减弱20%以上
-                    signals.append(BuySellPoint(
-                        type="一买",
-                        level=self.level,
-                        price=float(curr.low),
-                        datetime=curr.end,
-                        confidence=round(min(1.0, abs(1 - curr_power / prev_power) + 0.5), 2),
-                        stop_loss=float(curr.low * 0.97),
-                        description=f"背驰一买: 当前段力度{abs(curr_power):.2f} < 前段力度{abs(prev_power):.2f}"
-                    ))
-        return signals
+        pair = self._trend_comparison_pair("down")
+        if pair is None:
+            return []
+        prev, curr = pair
+        prev_power = self._segment_power(prev)
+        curr_power = self._segment_power(curr)
+        if prev_power <= 0 or not (curr.low < prev.low and curr_power < prev_power * 0.8):
+            return []
+        return [BuySellPoint(
+            type="一买",
+            level=self.level,
+            price=float(curr.low),
+            datetime=curr.end,
+            confidence=round(min(1.0, abs(1 - curr_power / prev_power) + 0.5), 2),
+            stop_loss=float(curr.low * 0.97),
+            description=(
+                f"趋势背驰一买候选: 两个同级中枢下移，末段创新低且"
+                f"价格/时间力度降至{curr_power / prev_power:.0%}"
+            ),
+        )]
 
     def _detect_2nd_buy(self, first_buys: list[BuySellPoint]) -> list[BuySellPoint]:
         """
@@ -152,31 +148,71 @@ class SignalDetector:
     # ── 上涨买卖点 ──────────────────────────────────────────────
 
     def _detect_1st_sell(self) -> list[BuySellPoint]:
-        """一卖: 上涨趋势背驰点"""
-        signals = []
-        up_segments = [s for s in self.segments if s.direction == "up"]
-        if len(up_segments) < 2:
-            return signals
+        """一卖: 上涨趋势末段创新高且力度衰竭。"""
+        pair = self._trend_comparison_pair("up")
+        if pair is None:
+            return []
+        prev, curr = pair
+        prev_power = self._segment_power(prev)
+        curr_power = self._segment_power(curr)
+        if prev_power <= 0 or not (curr.high > prev.high and curr_power < prev_power * 0.8):
+            return []
+        return [BuySellPoint(
+            type="一卖",
+            level=self.level,
+            price=float(curr.high),
+            datetime=curr.end,
+            confidence=round(min(1.0, abs(1 - curr_power / prev_power) + 0.5), 2),
+            stop_loss=float(curr.high * 1.03),
+            description=(
+                f"趋势背驰一卖候选: 两个同级中枢上移，末段创新高且"
+                f"价格/时间力度降至{curr_power / prev_power:.0%}"
+            ),
+        )]
 
-        for i in range(1, len(up_segments)):
-            prev = up_segments[i - 1]
-            curr = up_segments[i]
+    @staticmethod
+    def _segment_power(segment: XiangSegment) -> float:
+        duration = max(1.0, (segment.end - segment.start).total_seconds())
+        return abs(float(segment.high) - float(segment.low)) / duration
 
-            if curr.high > prev.high:
-                prev_power = (prev.high - prev.low) / max(1, (prev.end - prev.start).total_seconds())
-                curr_power = (curr.high - curr.low) / max(1, (curr.end - curr.start).total_seconds())
+    def _trend_comparison_pair(
+        self, direction: Literal["up", "down"]
+    ) -> Optional[tuple[XiangSegment, XiangSegment]]:
+        """严格取得 a+A+b+B+c 中进入末中枢的 b 与离开段 c。"""
+        centers = sorted(
+            [
+                z for z in self.zhongshus
+                if z.source_type == "segment"
+                and z.level == 2
+                and z.status != "expanded"
+                and z.confirmed
+            ],
+            key=lambda z: (z.start, z.end),
+        )
+        if len(centers) < 2:
+            return None
+        pairs = list(zip(centers, centers[1:]))
+        if direction == "up":
+            is_trend = all(right.range_low > left.range_high for left, right in pairs)
+        else:
+            is_trend = all(right.range_high < left.range_low for left, right in pairs)
+        if not is_trend:
+            return None
 
-                if curr_power < prev_power * 0.8:
-                    signals.append(BuySellPoint(
-                        type="一卖",
-                        level=self.level,
-                        price=float(curr.high),
-                        datetime=curr.end,
-                        confidence=round(min(1.0, abs(1 - curr_power / prev_power) + 0.5), 2),
-                        stop_loss=float(curr.high * 1.03),
-                        description=f"背驰一卖: 当前段力度{abs(curr_power):.2f} < 前段力度{abs(prev_power):.2f}"
-                    ))
-        return signals
+        last = centers[-1]
+        if last.status != "completed" or last.exit_direction != direction:
+            return None
+        incoming = [
+            s for s in self.segments
+            if s.confirmed and s.direction == direction and s.end <= last.start
+        ]
+        outgoing = [
+            s for s in self.segments
+            if s.confirmed and s.direction == direction and s.start >= last.end
+        ]
+        if not incoming or not outgoing:
+            return None
+        return incoming[-1], outgoing[-1]
 
     def _detect_2nd_sell(self, first_sells: list[BuySellPoint]) -> list[BuySellPoint]:
         """
