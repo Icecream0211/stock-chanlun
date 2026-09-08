@@ -171,7 +171,7 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertEqual(zs.status, "extended")
         self.assertEqual(zs.xiang_ids, ["xiang_1", "xiang_2", "xiang_3", "xiang_4"])
 
-    def test_detect_zhongshus_leave_then_return_continues_extension(self):
+    def test_detect_zhongshus_keeps_crossing_structure_as_extension(self):
         segments = [
             self._segment(1, "up", 0, 10, 110.0, 100.0),
             self._segment(2, "down", 11, 20, 108.0, 102.0),
@@ -184,11 +184,120 @@ class SegmentDetectorTests(unittest.TestCase):
 
         self.assertEqual(len(zhongshus), 1)
         zs = zhongshus[0]
+        # 两段均仍与 [103, 108] 有严格交集；即使端点在核心外，也仍是延伸。
         self.assertEqual(zs.status, "extended")
         self.assertIsNone(zs.exit_direction)
         self.assertEqual(zs.end, segments[4].end)
         self.assertEqual(zs.structure_count, 5)
         self.assertEqual(zs.extension_count, 2)
+
+    def test_detect_zhongshus_keeps_tail_crossing_core_as_extension(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 110.0, 100.0),
+            self._segment(2, "down", 11, 20, 108.0, 102.0),
+            self._segment(3, "up", 21, 30, 109.0, 103.0),
+            # 第四段仍穿过核心，即使收在核心下方，也不能把它当作离开。
+            self._segment(4, "down", 31, 40, 106.0, 95.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 1)
+        zs = zhongshus[0]
+        self.assertEqual(zs.status, "extended")
+        self.assertIsNone(zs.exit_direction)
+        self.assertEqual(zs.end, segments[3].end)
+
+    def test_bi_center_ends_on_first_wholly_disjoint_pen_without_waiting_for_return(self):
+        # 笔中枢固定核心为前三笔的 [11, 14]。第 4 笔虽穿过核心后收在下方，
+        # 仍属延伸；第 5 笔整个价格区间 [8, 10] 已完全在 ZD 下方，按锁定
+        # 口径旧中枢此刻立即结束，不能等第 6 笔“回抽失败”才完成。
+        bis = self._bis_from_points([10.0, 14.0, 11.0, 15.0, 8.0, 10.0])
+
+        zhongshus = SegmentDetector(bis).detect_bi_zhongshus()
+
+        self.assertEqual(len(zhongshus), 1)
+        center = zhongshus[0]
+        self.assertEqual(center.status, "completed")
+        self.assertEqual(center.exit_direction, "down")
+        self.assertEqual(center.xiang_ids, ["bi_1", "bi_2", "bi_3", "bi_4"])
+
+    def test_first_disjoint_structure_is_next_center_search_start(self):
+        segments = [
+            self._segment(1, "up", 0, 10, 110.0, 100.0),
+            self._segment(2, "down", 11, 20, 108.0, 102.0),
+            self._segment(3, "up", 21, 30, 109.0, 103.0),
+            # 第 4 段整体高于初始核心 [103, 108]，它既结束旧中枢，也必须
+            # 作为下一组三段的首段，不能被旧状态机吞掉。
+            self._segment(4, "down", 31, 40, 120.0, 111.0),
+            self._segment(5, "up", 41, 50, 121.0, 112.0),
+            self._segment(6, "down", 51, 60, 119.0, 113.0),
+        ]
+
+        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 2)
+        self.assertEqual(zhongshus[0].status, "completed")
+        self.assertEqual(zhongshus[0].xiang_ids, ["xiang_1", "xiang_2", "xiang_3"])
+        self.assertEqual(zhongshus[1].xiang_ids, ["xiang_4", "xiang_5", "xiang_6"])
+
+    def test_same_level_bi_zhongshus_split_six_pens_into_two_consolidations(self):
+        bis = self._bis_from_points([100.0, 110.0, 102.0, 109.0, 103.0, 108.0, 104.0])
+
+        zhongshus = SegmentDetector(bis).detect_same_level_bi_zhongshus()
+
+        self.assertEqual(len(zhongshus), 2)
+        self.assertEqual(zhongshus[0].xiang_ids, ["bi_1", "bi_2", "bi_3"])
+        self.assertEqual(zhongshus[1].xiang_ids, ["bi_4", "bi_5", "bi_6"])
+        self.assertTrue(all(z.decomposition == "same_level" for z in zhongshus))
+
+    def test_same_level_bi_zhongshus_do_not_cross_completed_segment_boundary(self):
+        # 两个相反方向的完整线段各自都有三笔重叠。全局笔中枢若跨界延伸，
+        # 会把它们误画成同一个大框；线段分解必须分别保留两个局部中枢。
+        bis = self._bis_from_points([10.0, 14.0, 11.0, 15.0, 10.0, 14.0, 9.0])
+        segments = [
+            self._segment(1, "up", 0, 15, 15.0, 10.0).model_copy(update={
+                "bi_ids": ["bi_1", "bi_2", "bi_3"],
+                "confirmed": True,
+            }),
+            self._segment(2, "down", 15, 30, 15.0, 9.0).model_copy(update={
+                "bi_ids": ["bi_4", "bi_5", "bi_6"],
+                "confirmed": True,
+            }),
+        ]
+
+        zhongshus = SegmentDetector(bis).detect_same_level_bi_zhongshus(segments)
+
+        self.assertEqual(len(zhongshus), 2)
+        self.assertEqual(zhongshus[0].xiang_ids, ["bi_1", "bi_2", "bi_3"])
+        self.assertEqual(zhongshus[1].xiang_ids, ["bi_4", "bi_5", "bi_6"])
+        self.assertTrue(all(z.status == "forming" for z in zhongshus))
+        self.assertTrue(all(z.decomposition == "same_level" for z in zhongshus))
+
+    def test_same_level_tail_center_with_virtual_pen_is_only_a_candidate(self):
+        bis = self._bis_from_points([10.0, 14.0, 11.0, 15.0, 10.0, 14.0, 9.0, 10.0, 9.0, 10.0])
+        bis[-1] = bis[-1].model_copy(update={"confirmed": False})
+        segments = [
+            self._segment(1, "up", 0, 15, 15.0, 10.0).model_copy(update={
+                "bi_ids": ["bi_1", "bi_2", "bi_3"],
+                "confirmed": True,
+            }),
+            self._segment(2, "down", 15, 30, 15.0, 9.0).model_copy(update={
+                "bi_ids": ["bi_4", "bi_5", "bi_6"],
+                "confirmed": True,
+            }),
+            self._segment(3, "up", 30, 45, 10.0, 9.0).model_copy(update={
+                "bi_ids": ["bi_7", "bi_8", "bi_9"],
+                "confirmed": False,
+            }),
+        ]
+
+        zhongshus = SegmentDetector(bis).detect_same_level_bi_zhongshus(segments)
+
+        candidate = zhongshus[-1]
+        self.assertEqual(candidate.xiang_ids, ["bi_7", "bi_8", "bi_9"])
+        self.assertFalse(candidate.confirmed)
+        self.assertEqual(candidate.decomposition, "same_level")
 
     def test_confirmed_pullback_below_core_completes_extended_center(self):
         segments = [
@@ -235,7 +344,7 @@ class SegmentDetectorTests(unittest.TestCase):
         self.assertEqual(zs.end, segments[2].end)
         self.assertEqual(zs.xiang_ids, ["xiang_1", "xiang_2", "xiang_3"])
 
-    def test_detect_zhongshus_allows_single_price_core(self):
+    def test_detect_zhongshus_rejects_single_price_core(self):
         segments = [
             self._segment(1, "up", 0, 10, 110.0, 100.0),
             self._segment(2, "down", 11, 20, 115.0, 105.0),
@@ -244,9 +353,7 @@ class SegmentDetectorTests(unittest.TestCase):
 
         zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
 
-        self.assertEqual(len(zhongshus), 1)
-        self.assertAlmostEqual(zhongshus[0].range_high, 110.0)
-        self.assertAlmostEqual(zhongshus[0].range_low, 110.0)
+        self.assertEqual(zhongshus, [])
 
     def test_detect_zhongshus_nine_structure_extension_creates_parent_center(self):
         segments = [
@@ -261,7 +368,7 @@ class SegmentDetectorTests(unittest.TestCase):
             for idx in range(1, 10)
         ]
 
-        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+        zhongshus = SegmentDetector(bis=[], include_expansion=True).detect_zhongshus(segments)
 
         self.assertEqual(len(zhongshus), 2)
         child = next(z for z in zhongshus if z.status != "expanded")
@@ -290,7 +397,7 @@ class SegmentDetectorTests(unittest.TestCase):
             for idx in range(1, 11)
         ]
 
-        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+        zhongshus = SegmentDetector(bis=[], include_expansion=True).detect_zhongshus(segments)
 
         parent = next(z for z in zhongshus if z.status == "expanded")
         self.assertEqual(parent.structure_count, 9)
@@ -307,7 +414,7 @@ class SegmentDetectorTests(unittest.TestCase):
             self._segment(6, "down", 51, 60, 126.0, 120.0),
         ]
 
-        zhongshus = SegmentDetector(bis=[]).detect_zhongshus(segments)
+        zhongshus = SegmentDetector(bis=[], include_expansion=True).detect_zhongshus(segments)
 
         self.assertEqual(len(zhongshus), 3)
         parent = next(z for z in zhongshus if z.status == "expanded")

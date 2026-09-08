@@ -20,6 +20,8 @@ export interface IndicatorConfig {
   signals: boolean
   aiLines: boolean
   supportResistance: boolean
+  /** 标准笔级中枢，或仅用于局部观察的线段边界切分。 */
+  zhongshuView: 'growth' | 'sameLevel'
   // 副图
   volume: boolean
   macd: boolean
@@ -41,19 +43,32 @@ export const defaultIndicators: IndicatorConfig = {
   signals: true,
   aiLines: false,
   supportResistance: false,
+  zhongshuView: 'growth',
   volume: true,
   macd: true,
   rsi: false,
   skdj: false,
 }
 
-const INDICATOR_KEY = 'chanstock_indicators_v2'
+const INDICATOR_KEY = 'chanstock_indicators_v4'
+const PREVIOUS_INDICATOR_KEY = 'chanstock_indicators_v3'
 const LEGACY_INDICATOR_KEY = 'chanstock_indicators_v1'
 
 function loadIndicators(): IndicatorConfig {
   try {
     const raw = localStorage.getItem(INDICATOR_KEY)
     if (raw) return { ...defaultIndicators, ...JSON.parse(raw) as Partial<IndicatorConfig> }
+
+    // v4 使用严格的固定核心笔级中枢为默认口径；线段边界切分仅用于局部对照，
+    // 不再暗示它就是完整的同级别走势分解。
+    const previousRaw = localStorage.getItem(PREVIOUS_INDICATOR_KEY)
+    if (previousRaw) {
+      return {
+        ...defaultIndicators,
+        ...JSON.parse(previousRaw) as Partial<IndicatorConfig>,
+        zhongshuView: 'growth',
+      }
+    }
 
     // v1 中辅助横线曾默认展示。迁移时保留其余偏好，但明确关闭两类易造成拥挤的横线。
     const legacyRaw = localStorage.getItem(LEGACY_INDICATOR_KEY)
@@ -354,12 +369,18 @@ export const useChanlunStore = defineStore('chanlun', () => {
     await fetchAISignal(code, currentLevel.value, { useLlm: false, force: true })
   }
 
-  function toggleIndicator(key: keyof IndicatorConfig) {
+  type BooleanIndicatorKey = Exclude<keyof IndicatorConfig, 'zhongshuView'>
+
+  function toggleIndicator(key: BooleanIndicatorKey) {
     indicators.value[key] = !indicators.value[key]
   }
 
-  function setIndicator(key: keyof IndicatorConfig, value: boolean) {
+  function setIndicator(key: BooleanIndicatorKey, value: boolean) {
     indicators.value[key] = value
+  }
+
+  function setZhongshuView(view: IndicatorConfig['zhongshuView']) {
+    indicators.value.zhongshuView = view
   }
 
   return {
@@ -369,6 +390,6 @@ export const useChanlunStore = defineStore('chanlun', () => {
     currentLevel, aiModel, aiModelOptions, indicators,
     klineUpdatedAt, chanlunUpdatedAt, aiUpdatedAt,
     fetchKline, fetchChanlun, fetchAISignal, loadAll, setAiModel,
-    toggleIndicator, setIndicator,
+    toggleIndicator, setIndicator, setZhongshuView,
   }
 })

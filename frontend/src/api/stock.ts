@@ -175,13 +175,14 @@ export interface Zhongshu {
   gg?: number
   dd?: number
   level?: number
-  status?: 'forming' | 'extended' | 'completed' | 'expanded'
+  status?: 'forming' | 'extended' | 'leaving' | 'completed' | 'expanded'
   structure_count?: number
   extension_count?: number
   exit_direction?: 'up' | 'down' | null
   expansion_type?: 'nine_structure' | 'center_overlap' | null
   parent_id?: string | null
   child_ids?: string[]
+  decomposition?: 'growth' | 'same_level'
 }
 
 export interface Signal {
@@ -368,6 +369,7 @@ export interface ChanlunResult {
   bis: Bi[]
   xiangs: XiangSegment[]
   bi_zhongshus?: Zhongshu[]
+  same_level_bi_zhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   supportResistance: SupportResistance[]

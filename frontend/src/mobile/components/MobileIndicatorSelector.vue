@@ -51,6 +51,11 @@
                   {{ ind.label }}
                 </button>
               </div>
+              <div class="center-view">
+                <span>中枢视角</span>
+                <button :class="{ active: cfg.zhongshuView === 'growth' }" @click="store.setZhongshuView('growth')">标准笔级</button>
+                <button :class="{ active: cfg.zhongshuView === 'sameLevel' }" @click="store.setZhongshuView('sameLevel')">线段内局部</button>
+              </div>
             </div>
 
             <!-- 副图指标 -->
@@ -125,13 +130,13 @@ function toggleOpen() {
 
 function showAll() {
   for (const key in store.indicators) {
-    store.setIndicator(key as keyof IndicatorConfig, true)
+    if (key !== 'zhongshuView') store.setIndicator(key as Exclude<keyof IndicatorConfig, 'zhongshuView'>, true)
   }
 }
 
 function hideAll() {
   for (const key in store.indicators) {
-    store.setIndicator(key as keyof IndicatorConfig, false)
+    if (key !== 'zhongshuView') store.setIndicator(key as Exclude<keyof IndicatorConfig, 'zhongshuView'>, false)
   }
 }
 </script>
@@ -163,6 +168,30 @@ function hideAll() {
   border-color: rgba(56, 189, 248, 0.45);
   color: var(--text-primary);
   background: rgba(56, 189, 248, 0.08);
+}
+
+.center-view {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.76rem;
+  color: var(--text-secondary);
+}
+
+.center-view button {
+  padding: 4px 7px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+}
+
+.center-view button.active {
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.1);
 }
 
 /* ── 面板 ── */

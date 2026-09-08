@@ -16,8 +16,9 @@ class SegmentDetector:
     中枢规则（standard 模式）:
     - 3个连续、方向交替的已完成同级结构存在交集时形成中枢
     - 初始三结构确定固定核心 [ZD, ZG]，后续延伸不收窄核心
-    - 离开后须由下一结构回抽不进入核心，才能确认中枢结束
-    - 九结构延伸或相邻同级中枢外围区间重叠时，生成高一级父中枢
+    - 后续结构与固定核心仍有严格价格交集时，属于中枢延伸
+    - 首条价格区间与核心完全无交集的结构，即结束旧中枢，并作为新中枢的搜索起点
+    - 九结构/外围重叠的递归父中枢只在显式研究模式中生成，不作为默认图层
     """
 
     def __init__(
@@ -26,10 +27,12 @@ class SegmentDetector:
         *,
         zhongshu_mode: Literal["standard", "all_overlap"] = "standard",
         price_epsilon: float = 1e-8,
+        include_expansion: bool = False,
     ):
         self.bis = bis
         self.zhongshu_mode = zhongshu_mode
         self.price_epsilon = max(0.0, float(price_epsilon))
+        self.include_expansion = include_expansion
 
     def detect_segments(self, min_overlap_bis: int = 3, max_iterations: int = 10000) -> list[XiangSegment]:
         """
@@ -147,6 +150,115 @@ class SegmentDetector:
             id_prefix="bi_zs",
         )
 
+    def detect_same_level_bi_zhongshus(
+        self,
+        segments: Optional[list[XiangSegment]] = None,
+    ) -> list[Zhongshu]:
+        """按线段边界分解笔中枢。
+
+        同级别分解不能把整段历史的笔机械按每三笔切块：那样会让一个笔
+        中枢穿过已经完成的线段转折，误显示成仍在延伸的“大中枢”。传入
+        线段后，每个线段只使用其内部的笔独立运行中枢状态机；相邻线段
+        的笔不允许共同组成中枢。未确认尾段仅在最后三笔（含虚拟笔）确有
+        三笔重叠时，给出 ``confirmed=False`` 的候选中枢。
+
+        ``segments=None`` 保留旧调用的三笔分组行为，兼容旧接口与历史数据。
+        引擎始终传入线段，因此图表默认使用严格的线段边界口径。
+        """
+        if segments is None:
+            return self._detect_legacy_same_level_bi_zhongshus()
+
+        bi_by_id = {bi.id: bi for bi in self.bis}
+        zhongshus: list[Zhongshu] = []
+
+        def append_local(items: list[Zhongshu], segment: XiangSegment) -> None:
+            for item in items:
+                zhongshus.append(item.model_copy(update={
+                    "id": f"bi_same_level_{len(zhongshus) + 1}",
+                    "decomposition": "same_level",
+                }))
+
+        for segment in segments:
+            segment_bis = [bi_by_id[bi_id] for bi_id in segment.bi_ids if bi_id in bi_by_id]
+            if len(segment_bis) < 3:
+                continue
+            if segment.confirmed:
+                # 只产生子中枢，不在单个线段内部递归生成父中枢；父级中枢
+                # 应由下一层线段序列另行识别，不能跨当前边界拼接。
+                append_local(
+                    self._detect_standard_zhongshus(
+                        segment_bis,
+                        source_type="bi",
+                        level=1,
+                        id_prefix="scoped_bi_zs",
+                    ),
+                    segment,
+                )
+                continue
+
+            # 未确认尾段：只能以末尾三笔（至少有一笔虚拟）形成候选，不能
+            # 用已完成的前序笔重新拼出一个“已确认”中枢。
+            tail = segment_bis[-3:]
+            if (
+                len(tail) == 3
+                and any(not getattr(bi, "confirmed", True) for bi in tail)
+                and tail[0].direction != tail[1].direction
+                and tail[0].direction == tail[2].direction
+            ):
+                zg = float(min(bi.high for bi in tail))
+                zd = float(max(bi.low for bi in tail))
+                if self._has_overlap(zg, zd):
+                    zhongshus.append(Zhongshu(
+                        id=f"bi_same_level_{len(zhongshus) + 1}",
+                        start=tail[0].start,
+                        end=tail[-1].end,
+                        range_high=zg,
+                        range_low=zd,
+                        zg=zg,
+                        zd=zd,
+                        gg=float(max(bi.high for bi in tail)),
+                        dd=float(min(bi.low for bi in tail)),
+                        xiang_ids=[bi.id for bi in tail],
+                        level=1,
+                        confirmed=False,
+                        source_type="bi",
+                        status="forming",
+                        structure_count=3,
+                        decomposition="same_level",
+                    ))
+        return zhongshus
+
+    def _detect_legacy_same_level_bi_zhongshus(self) -> list[Zhongshu]:
+        """旧的三笔分块口径，仅供兼容未提供线段的调用方。"""
+        zhongshus: list[Zhongshu] = []
+        for start_idx in range(0, len(self.bis) - 2, 3):
+            group = self.bis[start_idx:start_idx + 3]
+            if not self._is_alternating_triplet(group):
+                continue
+            zg = float(min(item.high for item in group))
+            zd = float(max(item.low for item in group))
+            if not self._has_overlap(zg, zd):
+                continue
+            zhongshus.append(Zhongshu(
+                id=f"bi_same_level_{len(zhongshus) + 1}",
+                start=group[0].start,
+                end=group[-1].end,
+                range_high=zg,
+                range_low=zd,
+                zg=zg,
+                zd=zd,
+                gg=float(max(item.high for item in group)),
+                dd=float(min(item.low for item in group)),
+                xiang_ids=[item.id for item in group],
+                level=1,
+                confirmed=True,
+                source_type="bi",
+                status="forming",
+                structure_count=3,
+                decomposition="same_level",
+            ))
+        return zhongshus
+
     def _detect_structure_zhongshus(
         self,
         structures: list[Bi] | list[XiangSegment],
@@ -173,6 +285,8 @@ class SegmentDetector:
             level=level,
             id_prefix=id_prefix,
         )
+        if not self.include_expansion:
+            return base
         expanded = self._detect_expanded_zhongshus(
             base,
             id_prefix=id_prefix,
@@ -191,9 +305,10 @@ class SegmentDetector:
         """
         标准中枢状态机。
 
-        初始三结构固定 ZD/ZG。后续结构若进入核心则延伸；若离开核心，
-        必须等下一反向结构回抽确认。回抽重入则继续延伸，回抽仍在核心外
-        才结束原中枢。末尾只有离开而没有回抽时，不提前确认中枢被破坏。
+        初始三结构确定固定核心 [ZD, ZG]，且必须满足严格的 ZG > ZD。
+        后续结构只要价格区间与固定核心仍有严格交集，均为延伸，核心本身
+        不收窄、不平移。第一条价格区间完全脱离核心的结构立即结束旧中枢；
+        该离开结构不属于旧中枢，并从它重新开始搜索下一中枢。
         """
         zhongshus: list[Zhongshu] = []
         i = 0
@@ -213,49 +328,22 @@ class SegmentDetector:
             included = list(group)
             cursor = i + 3
             completed = False
-            # 一条结构可以与核心有交集、但终点已经离开核心。此时下一条
-            # 反向结构就是回抽，不能再把它误当成“首次离开”。
-            pending_exit_direction = self._point_outside_direction(
-                group[-1].end_price, zd, zg
-            )
             exit_direction = None
 
             while cursor < len(structures):
                 current = structures[cursor]
-
-                if pending_exit_direction is not None:
-                    if self._intersects_core(current, zd, zg):
-                        included.append(current)
-                        pending_exit_direction = self._point_outside_direction(
-                            current.end_price, zd, zg
-                        )
-                        cursor += 1
-                        continue
-
-                    # 离开核心后的已确认反向结构仍未进入核心，原中枢结束。
-                    completed = True
-                    exit_direction = pending_exit_direction
-                    break
-
                 if self._intersects_core(current, zd, zg):
                     included.append(current)
-                    pending_exit_direction = self._point_outside_direction(
-                        current.end_price, zd, zg
-                    )
                     cursor += 1
                     continue
 
-                # 正常连续结构不会从核心内瞬移到完全位于核心外。为兼容脏数据，
-                # 仍将其记录为待确认离开，等待下一条反向结构决定是否返回。
-                pending_exit_direction = self._outside_direction(current, zd, zg)
-                if cursor + 1 >= len(structures):
-                    break
-                cursor += 1
+                # 完全脱离的当前结构就是中枢结束证据，不能等待下一结构“确认”。
+                completed = True
+                exit_direction = self._outside_direction(current, zd, zg)
+                break
 
             structure_count = len(included)
-            status = "completed" if completed else (
-                "extended" if structure_count > 3 else "forming"
-            )
+            status = "completed" if completed else ("extended" if structure_count > 3 else "forming")
             zhongshus.append(Zhongshu(
                 id=f"{id_prefix}_{len(zhongshus) + 1}",
                 start=group[0].start,
@@ -273,10 +361,10 @@ class SegmentDetector:
                 status=status,
                 structure_count=structure_count,
                 extension_count=max(0, structure_count - 3),
-                exit_direction=exit_direction if completed else None,
+                exit_direction=exit_direction,
             ))
 
-            # 已确认离开时，从离开结构重新寻找下一中枢；其余情况已到序列尾部。
+            # 从离开结构重新寻找下一中枢；未离开说明已经扫描到序列尾部。
             i = cursor if completed else len(structures)
 
         return zhongshus
@@ -515,8 +603,8 @@ class SegmentDetector:
         return expanded
 
     def _has_overlap(self, high: float, low: float) -> bool:
-        """允许在最小价格容差内退化为一价中枢。"""
-        return float(high) + self.price_epsilon >= float(low)
+        """中枢核心必须是具有宽度的严格交集，ZG == ZD 不构成中枢。"""
+        return float(high) - float(low) > self.price_epsilon
 
     def _intersects_core(self, structure: Bi | XiangSegment, zd: float, zg: float) -> bool:
         return self._range_intersects_core(structure.low, structure.high, zd, zg)
@@ -528,10 +616,7 @@ class SegmentDetector:
         zd: float,
         zg: float,
     ) -> bool:
-        return (
-            float(high) + self.price_epsilon >= zd
-            and float(low) - self.price_epsilon <= zg
-        )
+        return min(float(high), float(zg)) - max(float(low), float(zd)) > self.price_epsilon
 
     @staticmethod
     def _is_alternating_triplet(group: list[Bi] | list[XiangSegment]) -> bool:

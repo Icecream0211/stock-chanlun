@@ -151,6 +151,30 @@ class BiDetectorFenxingCompressionTests(unittest.TestCase):
         self.assertEqual(bis[-1].end, t0 + timedelta(days=7))
         self.assertAlmostEqual(bis[-1].end_price, 10.0)
 
+    def test_virtual_up_tail_is_removed_when_later_price_breaks_its_bottom(self):
+        """候选向上笔尚未确认前，跌破起点即失效，不能留下反向虚线。"""
+        t0 = datetime(2026, 1, 1)
+        frame = pd.DataFrame({
+            "date": [t0 + timedelta(days=i) for i in range(10)],
+            "open": [10.0] * 10,
+            "high": [10, 15, 14, 12, 10, 9, 11, 13, 10, 8],
+            "low": [9, 12, 11, 9, 8, 7, 8, 10, 7, 6],
+            "close": [10.0] * 10,
+            "volume": [100.0] * 10,
+        })
+        detector = BiDetector(frame)
+        detector._fenxing_detector.klines = frame.copy()
+        detector._fenxing_detector.detect = Mock(return_value=[
+            Fenxing(date=t0 + timedelta(days=1), type="top", high=15.0, low=12.0, index=1),
+            Fenxing(date=t0 + timedelta(days=5), type="bottom", high=9.0, low=7.0, index=5),
+        ])
+
+        bis = detector.detect(min_bars=5, include_virtual=True)
+
+        self.assertEqual(len(bis), 1)
+        self.assertTrue(bis[0].confirmed)
+        self.assertEqual(bis[0].direction, "down")
+
     def test_new_pen_accepts_raw_five_bars_when_processed_gap_is_three(self):
         t0 = datetime(2026, 1, 1)
         frame = pd.DataFrame({

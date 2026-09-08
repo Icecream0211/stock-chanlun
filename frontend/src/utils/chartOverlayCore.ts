@@ -318,8 +318,12 @@ export function buildChanlunGraphicChildren(ctx: {
       const yPx1 = Math.min(a[1], b[1])
       const yPx2 = Math.max(a[1], b[1])
       const expanded = zs.status === 'expanded'
-      const statusLabel = zs.status === 'extended'
+      const statusLabel = zs.confirmed === false
+          ? '候选'
+          : zs.status === 'extended'
           ? '延伸'
+          : zs.status === 'leaving'
+            ? `离开${zs.exit_direction === 'down' ? '↓' : zs.exit_direction === 'up' ? '↑' : ''}待确认`
           : zs.status === 'completed'
             ? '完成'
             : '形成'
@@ -355,7 +359,7 @@ export function buildChanlunGraphicChildren(ctx: {
         }
         if (width >= 30) {
           const expansionLabel = zs.expansion_type === 'nine_structure'
-            ? `9结构升L${zs.level ?? (dashed ? 2 : 3)}`
+            ? `9笔递归候选L${zs.level ?? (dashed ? 2 : 3)}`
             : zs.expansion_type === 'center_overlap'
               ? `同级叠升L${zs.level ?? (dashed ? 2 : 3)}`
               : `扩L${zs.level ?? (dashed ? 2 : 3)}`
@@ -392,14 +396,15 @@ export function buildChanlunGraphicChildren(ctx: {
           stroke,
           lineWidth: dashed ? 1 : 1.35,
           lineDash: dashed || zs.confirmed === false ? [6, 4] : undefined,
-          opacity: 0.9,
+          // 已结束的中枢是历史上下文，不与正在运行的笔、线段争夺视觉层级。
+          opacity: zs.confirmed === false ? 0.52 : zs.status === 'completed' ? 0.46 : 0.9,
         },
         z, silent: true,
       })
       children.push({
         type: 'text',
         style: {
-          text: `L${zs.level ?? (dashed ? 1 : 2)}·${statusLabel}${
+          text: `${zs.decomposition === 'same_level' ? '段内局部L' : '笔级L'}${zs.level ?? (dashed ? 1 : 2)}·${statusLabel}${
             zs.status === 'extended' && (zs.structure_count ?? 0) > 3
               ? `·${zs.structure_count}${zs.source_type === 'bi' ? '笔' : '段'}`
               : ''
@@ -473,7 +478,7 @@ export function buildChanlunGraphicChildren(ctx: {
 
   // 笔统一使用电光蓝连续折线；线段使用更粗的橙色，避免和涨跌 K 线混淆。
   appendStructurePolylines(bis, theme.biColor, 1.7, 102)
-  appendStructurePolylines(xiangs, theme.segmentColor, 2.8, 103)
+  appendStructurePolylines(xiangs, theme.segmentColor, 3.2, 103)
 
   // 类型用形状/色系区分：趋势=实心圆，盘整=菱形，力度背离=空心圆；上下位置表示顶/底。
   const divergenceStacks = new Map<string, number>()

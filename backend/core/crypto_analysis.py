@@ -93,6 +93,7 @@ def serialize_crypto_analysis(result: ChanlunAnalysis) -> dict:
         ],
         "zhongshus": [_serialize_zhongshu(z) for z in result.zhongshus],
         "bi_zhongshus": [_serialize_zhongshu(z) for z in result.bi_zhongshus],
+        "same_level_bi_zhongshus": [_serialize_zhongshu(z) for z in result.same_level_bi_zhongshus],
         "signals": [
             {
                 "type": s.type,

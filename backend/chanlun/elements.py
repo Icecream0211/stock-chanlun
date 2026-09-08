@@ -71,13 +71,16 @@ class Zhongshu(BaseModel):
     zd: Optional[float] = None  # 中枢核心下沿，由初始三结构确定，延伸时不改变
     gg: Optional[float] = None  # 中枢震荡涉及结构的最高点
     dd: Optional[float] = None  # 中枢震荡涉及结构的最低点
-    status: Literal["forming", "extended", "completed", "expanded"] = "forming"
+    # leaving 表示已从固定核心离开、但尚未由反向回抽确认破坏。
+    status: Literal["forming", "extended", "leaving", "completed", "expanded"] = "forming"
     structure_count: int = 3
     extension_count: int = 0
     exit_direction: Optional[Literal["up", "down"]] = None
     expansion_type: Optional[Literal["nine_structure", "center_overlap"]] = None
     parent_id: Optional[str] = None
     child_ids: list[str] = Field(default_factory=list)
+    # growth=中枢生长口径；same_level=同级别分解口径。
+    decomposition: Literal["growth", "same_level"] = "growth"
 
 
 class MACDData(BaseModel):
@@ -129,6 +132,7 @@ class ChanlunAnalysis(BaseModel):
     xiangs: list[XiangSegment]
     zhongshus: list[Zhongshu]
     bi_zhongshus: list[Zhongshu] = Field(default_factory=list)
+    same_level_bi_zhongshus: list[Zhongshu] = Field(default_factory=list)
     signals: list[BuySellPoint]
     trend: Literal["上涨", "下跌", "盘整", "未知"]
     summary: str  # 自然语言总结

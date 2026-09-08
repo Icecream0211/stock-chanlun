@@ -276,6 +276,39 @@ describe('chartOverlayCore', () => {
     expect(children.some(item => item.type === 'rect')).toBe(false)
     expect(corners).toHaveLength(4)
     expect((corners[0].style as { lineDash?: number[] }).lineDash).toEqual([5, 4])
-    expect((label?.style as { text?: string }).text).toBe('9结构升L3')
+    expect((label?.style as { text?: string }).text).toBe('9笔递归候选L3')
+  })
+
+  it('labels a pending center departure and same-level decomposition distinctly', () => {
+    const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
+    const seriesKlines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))
+    const data = buildChanlunOverlayCache({
+      dates,
+      seriesKlines,
+      bis: [],
+      biZhongshus: [
+        { id: 'leaving', start: dates[0], end: dates[1], range_high: 11, range_low: 9, level: 1, status: 'leaving', exit_direction: 'down' },
+        { id: 'same', start: dates[1], end: dates[2], range_high: 10.5, range_low: 9.5, level: 1, decomposition: 'same_level' },
+      ],
+      zhongshus: [],
+      signals: [],
+      flags: { bis: false, biZhongshus: true, xiangs: false, zhongshus: false, signals: false, aiLines: false, supportResistance: false },
+    })
+    const children = buildChanlunGraphicChildren({
+      data, viewS: 0, viewE: 2, gridLeft: 0, gridRight: 200,
+      pixelAtIdx: (i, price) => [i * 100, 100 - price],
+      theme: {
+        upColor: '#f00', downColor: '#0f0', biColor: '#29f', biZhongshuStroke: '#29f', biZhongshuFill: 'rgba(0,0,255,.1)', segmentColor: '#f80',
+        zhongshuStroke: '#f36', zhongshuFill: 'rgba(255,0,0,.1)', strokeBg: '#000',
+        labelFont: 'sans-serif', signalRadius: 8, signalFontSize: 11, zsLabelFontSize: 9,
+        srLabelFontSize: 9, aiFontSize: 11, resonanceFontSize: 9, buyColors: {}, sellColors: {},
+      },
+    })
+
+    const labels = children
+      .filter(item => item.type === 'text')
+      .map(item => (item.style as { text?: string }).text)
+    expect(labels).toContain('笔级L1·离开↓待确认 11.00 / 9.00')
+    expect(labels).toContain('段内局部L1·形成 10.50 / 9.50')
   })
 })

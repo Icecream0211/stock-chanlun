@@ -26,6 +26,7 @@ def _serialize_zhongshu(z) -> dict:
         "expansion_type": z.expansion_type,
         "parent_id": z.parent_id,
         "child_ids": z.child_ids,
+        "decomposition": z.decomposition,
     }
 
 
@@ -101,6 +102,7 @@ def serialize_chanlun_analysis(result: ChanlunAnalysis) -> dict:
         ],
         "zhongshus": [_serialize_zhongshu(z) for z in result.zhongshus],
         "bi_zhongshus": [_serialize_zhongshu(z) for z in result.bi_zhongshus],
+        "same_level_bi_zhongshus": [_serialize_zhongshu(z) for z in result.same_level_bi_zhongshus],
         "signals": [
             {
                 "type": s.type,

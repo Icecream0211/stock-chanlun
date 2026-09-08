@@ -230,6 +230,11 @@ class BiDetector:
             end_price = float(row["high"])
             if end_price <= float(start.low):
                 return []
+            # 候选向上笔没有完成顶分型确认前，之后任何一根 K 线跌破其
+            # 起点，说明该反弹候选已失效。保留旧线会让图上出现与最新走势
+            # 相反的虚拟笔，且误导用户将其视作中枢回抽。
+            if float(tail["low"].astype(float).min()) < float(start.low):
+                return []
             end_date = row.get("high_date", row["date"])
             direction = "up"
             start_price = float(start.low)

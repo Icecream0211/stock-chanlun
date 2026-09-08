@@ -63,6 +63,7 @@ const props = defineProps<{
   inclusions?: KLineInclusion[]
   bis: Bi[]
   biZhongshus?: Zhongshu[]
+  sameLevelBiZhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   xiangs?: XiangSegment[]
@@ -72,6 +73,13 @@ const props = defineProps<{
   loading?: boolean
 }>()
 
+/** 不同口径只能择一绘制，避免“延伸大框”与同级分解框同时遮挡 K 线。 */
+const activeBiZhongshus = computed(() =>
+  getIndicators().zhongshuView === 'sameLevel'
+    ? (props.sameLevelBiZhongshus ?? [])
+    : (props.biZhongshus ?? []),
+)
+
 const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
@@ -80,7 +88,7 @@ let chart: echarts.ECharts | null = null
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
   ...(props.inclusions ?? []).flatMap(item => [item.start, item.end]),
   ...props.bis.flatMap(item => [item.start, item.end]),
-  ...(props.biZhongshus ?? []).flatMap(item => [item.start, item.end]),
+  ...activeBiZhongshus.value.flatMap(item => [item.start, item.end]),
   ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
   ...props.zhongshus.flatMap(item => [item.start, item.end]),
   ...props.signals.map(item => item.datetime),
@@ -95,6 +103,7 @@ function getIndicators(): Required<IndicatorConfig> {
     divergences: true,
     bis: true, biZhongshus: true, xiangs: true, zhongshus: true, signals: true, aiLines: false,
     supportResistance: false,
+    zhongshuView: 'growth',
     volume: true, macd: true, rsi: true, skdj: true,
     ...(props.indicators || {})
   }
@@ -108,8 +117,9 @@ let chanlunOverlayCache: ChanlunOverlayPayload | null = null
 const COLOR_UP = CHART_PALETTE.klineUp
 const COLOR_DOWN = CHART_PALETTE.klineDown
 const MAIN_TOP = 36
-const MAIN_HEIGHT = 420
-const SUB_PANEL_HEIGHT = { volume: 120, macd: 120, rsi: 100, skdj: 100 } as const
+// 主图必须是页面的视觉中心：即使四个副图都打开，K 线区仍高于全部副图之和。
+const MAIN_HEIGHT = 640
+const SUB_PANEL_HEIGHT = { volume: 100, macd: 100, rsi: 80, skdj: 80 } as const
 const SUB_PANEL_ORDER = ['volume', 'macd', 'rsi', 'skdj'] as const
 type SubPanelKey = (typeof SUB_PANEL_ORDER)[number]
 const SUB_GAP = 14
@@ -675,7 +685,7 @@ function syncChanlunOverlayCache() {
     seriesKlines,
     inclusions: props.inclusions,
     bis: props.bis,
-    biZhongshus: props.biZhongshus,
+    biZhongshus: activeBiZhongshus.value,
     xiangs: props.xiangs,
     zhongshus: props.zhongshus,
     signals: props.signals,
@@ -756,7 +766,7 @@ watch(
 )
 
 watch(
-  () => [props.inclusions, props.bis, props.biZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
+  () => [props.inclusions, props.bis, props.biZhongshus, props.sameLevelBiZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
   updateOverlayOnly,
   { deep: true }
 )
@@ -773,6 +783,7 @@ watch(
     props.indicators?.signals,
     props.indicators?.aiLines,
     props.indicators?.supportResistance,
+    props.indicators?.zhongshuView,
   ],
   updateOverlayOnly,
 )
@@ -811,7 +822,7 @@ watch(chartHeightPx, () => {
 }
 .kline-chart {
   width: 100%;
-  min-height: 420px;
+  min-height: 640px;
   opacity: 0;
   transition: opacity 0.22s ease;
 }
@@ -829,7 +840,7 @@ watch(chartHeightPx, () => {
 /* ── 骨架屏 ── */
 .kline-skeleton {
   width: 100%;
-  min-height: 420px;
+  min-height: 640px;
   padding: 16px 12px 12px;
   display: flex;
   flex-direction: column;

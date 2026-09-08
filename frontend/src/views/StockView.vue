@@ -218,6 +218,14 @@
             </div>
             <div class="company-info-actions layout-control">
               <button
+                class="ci-action-btn ci-action-btn--wide"
+                :class="{ active: showCompanyInfo }"
+                @click="showCompanyInfo = !showCompanyInfo"
+                :title="showCompanyInfo ? '收起基本资料' : '展开基本资料'"
+              >
+                {{ showCompanyInfo ? '收起资料' : '展开资料' }}
+              </button>
+              <button
                 class="ci-action-btn"
                 :class="{ active: !layout.leftVisible }"
                 @click="layout.leftVisible = !layout.leftVisible"
@@ -264,7 +272,7 @@
               </div>
             </div>
           </div>
-          <div class="company-info-sections">
+          <div v-show="showCompanyInfo" class="company-info-sections">
             <section v-if="infoPanelRows.length" class="ci-section">
               <div class="ci-section-head">
                 <span class="ci-section-title">基本指标</span>
@@ -307,6 +315,7 @@
           :inclusions="store.chanlunResult?.inclusions || []"
           :bis="store.chanlunResult?.bis || []"
           :bi-zhongshus="store.chanlunResult?.bi_zhongshus || []"
+          :same-level-bi-zhongshus="store.chanlunResult?.same_level_bi_zhongshus || []"
           :xiangs="store.chanlunResult?.xiangs || []"
           :zhongshus="store.chanlunResult?.zhongshus || []"
           :signals="store.chanlunResult?.signals || []"
@@ -404,15 +413,17 @@ type StockViewLayout = {
   rightWidth: number
 }
 
-const LAYOUT_KEY = 'chanstock_stockview_layout_v1'
+// v2 默认聚焦图表；左栏信息可从图表上方“左”按钮随时恢复。
+const LAYOUT_KEY = 'chanstock_stockview_layout_v2'
 const layout = ref<StockViewLayout>({
-  leftVisible: true,
+  leftVisible: false,
   rightVisible: true,
-  leftWidth: 240,
-  rightWidth: 280,
+  leftWidth: 220,
+  rightWidth: 260,
 })
 
 const showLayoutPanel = ref(false)
+const showCompanyInfo = ref(false)
 let layoutPanelClickHandler: ((e: MouseEvent) => void) | null = null
 
 function toggleLayoutPanel() {
@@ -450,10 +461,10 @@ function loadLayout() {
     if (!raw) return
     const parsed = JSON.parse(raw) as Partial<StockViewLayout>
     layout.value = {
-      leftVisible: parsed.leftVisible ?? true,
+      leftVisible: parsed.leftVisible ?? false,
       rightVisible: parsed.rightVisible ?? true,
-      leftWidth: clamp(Number(parsed.leftWidth ?? 240) || 240, 200, 360),
-      rightWidth: clamp(Number(parsed.rightWidth ?? 280) || 280, 240, 460),
+      leftWidth: clamp(Number(parsed.leftWidth ?? 220) || 220, 200, 360),
+      rightWidth: clamp(Number(parsed.rightWidth ?? 260) || 260, 240, 460),
     }
   } catch {
     // ignore
@@ -481,13 +492,13 @@ const mainGridStyle = computed(() => {
 })
 
 // 时间筛选
-function getOneYearAgo(): string {
+function getTwoYearsAgo(): string {
   const date = new Date()
-  date.setFullYear(date.getFullYear() - 1)
+  date.setFullYear(date.getFullYear() - 2)
   return date.toISOString().split('T')[0]
 }
 
-const startDate = ref(getOneYearAgo())
+const startDate = ref(getTwoYearsAgo())
 const endDate = ref('')
 const showDatePanel = ref(false)
 const dateFilterRef = ref<HTMLElement | null>(null)
@@ -530,7 +541,7 @@ function formatFilterText() {
 }
 
 function resetDateFilter() {
-  startDate.value = getOneYearAgo()
+  startDate.value = getTwoYearsAgo()
   endDate.value = ''
   showDatePanel.value = false
   cleanupDatePanelHandler()

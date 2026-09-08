@@ -78,6 +78,7 @@ const props = defineProps<{
   inclusions?: KLineInclusion[]
   bis: Bi[]
   biZhongshus?: Zhongshu[]
+  sameLevelBiZhongshus?: Zhongshu[]
   zhongshus: Zhongshu[]
   signals: Signal[]
   xiangs?: XiangSegment[]
@@ -89,6 +90,12 @@ const props = defineProps<{
   loading?: boolean
 }>()
 
+const activeBiZhongshus = computed(() =>
+  getIndicators().zhongshuView === 'sameLevel'
+    ? (props.sameLevelBiZhongshus ?? [])
+    : (props.biZhongshus ?? []),
+)
+
 const emit = defineEmits<{ 'zoomChange': [start: number, end: number] }>()
 
 const chartRef = ref<HTMLDivElement | null>(null)
@@ -98,7 +105,7 @@ let chart: echarts.ECharts | null = null
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
   ...(props.inclusions ?? []).flatMap(item => [item.start, item.end]),
   ...props.bis.flatMap(item => [item.start, item.end]),
-  ...(props.biZhongshus ?? []).flatMap(item => [item.start, item.end]),
+  ...activeBiZhongshus.value.flatMap(item => [item.start, item.end]),
   ...(props.xiangs ?? []).flatMap(item => [item.start, item.end]),
   ...props.zhongshus.flatMap(item => [item.start, item.end]),
   ...props.signals.map(item => item.datetime),
@@ -125,6 +132,7 @@ function getIndicators(): Required<IndicatorConfig> {
     divergences: true,
     bis: true, biZhongshus: true, xiangs: true, zhongshus: true,
     signals: true, aiLines: false, supportResistance: false,
+    zhongshuView: 'growth',
     volume: true, macd: false, rsi: false, skdj: false,
     ...(props.indicators || {})
   }
@@ -240,7 +248,7 @@ function buildOverlayData(): ChanlunOverlayPayload {
     seriesKlines: chartKlines,
     inclusions: props.inclusions,
     bis: props.bis,
-    biZhongshus: props.biZhongshus,
+    biZhongshus: activeBiZhongshus.value,
     xiangs: props.xiangs,
     zhongshus: props.zhongshus,
     signals: props.signals,
@@ -671,7 +679,7 @@ watch(
 )
 
 watch(
-  () => [props.inclusions, props.bis, props.biZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
+  () => [props.inclusions, props.bis, props.biZhongshus, props.sameLevelBiZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
   updateOverlayOnly,
   { deep: true }
 )
@@ -687,6 +695,7 @@ watch(
     props.indicators?.signals,
     props.indicators?.aiLines,
     props.indicators?.supportResistance,
+    props.indicators?.zhongshuView,
   ],
   updateOverlayOnly,
 )

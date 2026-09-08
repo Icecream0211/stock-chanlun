@@ -28,6 +28,7 @@
           :inclusions="store.chanlunResult?.inclusions || []"
           :bis="store.chanlunResult?.bis || []"
           :bi-zhongshus="store.chanlunResult?.bi_zhongshus || []"
+          :same-level-bi-zhongshus="store.chanlunResult?.same_level_bi_zhongshus || []"
           :xiangs="store.chanlunResult?.xiangs || []"
           :zhongshus="store.chanlunResult?.zhongshus || []"
           :signals="store.chanlunResult?.signals || []"

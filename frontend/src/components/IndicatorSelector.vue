@@ -100,6 +100,19 @@
               <span class="indicator-dot" style="background: #FF4D6D; opacity: 0.85"></span>
               <span>线段中枢</span>
             </label>
+            <div class="center-view" role="group" aria-label="中枢展示口径">
+              <span>中枢视角</span>
+              <button
+                type="button"
+                :class="{ active: indicators.zhongshuView === 'growth' }"
+                @click="store.setZhongshuView('growth')"
+              >标准笔级</button>
+              <button
+                type="button"
+                :class="{ active: indicators.zhongshuView === 'sameLevel' }"
+                @click="store.setZhongshuView('sameLevel')"
+              >线段内局部</button>
+            </div>
             <label class="indicator-item">
               <input
                 type="checkbox"
@@ -183,7 +196,7 @@
 
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import { useChanlunStore, type IndicatorConfig, defaultIndicators } from '../stores/chanlun'
+import { useChanlunStore, type IndicatorConfig } from '../stores/chanlun'
 
 const store = useChanlunStore()
 const isOpen = ref(false)
@@ -197,14 +210,14 @@ function toggleOpen() {
 function showAll() {
   const cfg = store.indicators
   for (const key in cfg) {
-    store.setIndicator(key as keyof IndicatorConfig, true)
+    if (key !== 'zhongshuView') store.setIndicator(key as Exclude<keyof IndicatorConfig, 'zhongshuView'>, true)
   }
 }
 
 function hideAll() {
   const cfg = store.indicators
   for (const key in cfg) {
-    store.setIndicator(key as keyof IndicatorConfig, false)
+    if (key !== 'zhongshuView') store.setIndicator(key as Exclude<keyof IndicatorConfig, 'zhongshuView'>, false)
   }
 }
 </script>
@@ -328,6 +341,36 @@ function hideAll() {
 .indicator-item span:last-child {
   font-size: 0.85rem;
   color: var(--text-primary);
+}
+
+.center-view {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 8px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.center-view span {
+  margin-right: 2px;
+}
+
+.center-view button {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 3px 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.center-view button.active {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.65);
+  background: rgba(56, 189, 248, 0.1);
 }
 
 .quick-actions {

@@ -61,6 +61,9 @@ class ChanlunEngine:
         # 4. 中枢识别：虚拟尾笔/尾段只用于画图，不能参与结构确认。
         confirmed_seg_detector = SegmentDetector(confirmed_bis)
         bi_zhongshus = confirmed_seg_detector.detect_bi_zhongshus()
+        # 同级别视图必须受线段边界约束。使用含虚拟尾笔的完整序列，才可以
+        # 在最后一段出现三笔重叠时标出“候选”，但只有已确认线段能产生正式中枢。
+        same_level_bi_zhongshus = seg_detector.detect_same_level_bi_zhongshus(segments)
         zhongshus = confirmed_seg_detector.detect_zhongshus(confirmed_segments)
 
         # 5. 买卖点判定
@@ -87,6 +90,7 @@ class ChanlunEngine:
             xiangs=segments,
             zhongshus=zhongshus,
             bi_zhongshus=bi_zhongshus,
+            same_level_bi_zhongshus=same_level_bi_zhongshus,
             signals=signals,
             trend=trend,
             summary=summary,
