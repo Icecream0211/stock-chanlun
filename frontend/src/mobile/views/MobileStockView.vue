@@ -34,11 +34,14 @@
           :signals="store.chanlunResult?.signals || []"
           :ai-signal="store.aiSignal"
           :support-resistance="store.chanlunResult?.supportResistance || []"
+          :stock-code="stockCode"
+          :level="currentLevel"
           :indicators="store.indicators"
           :zoom-start="zoomStart"
           :zoom-end="zoomEnd"
           :loading="store.loadingChart"
           @zoom-change="onZoomChange"
+          @load-more-left="store.loadEarlierKlines"
         />
       </div>
 

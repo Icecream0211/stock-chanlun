@@ -596,13 +596,24 @@ export const stockApi = {
     )
   },
 
-  chanlun(code: string, level: string, options?: GetCacheOptions) {
-    const key = `GET:/chanlun/${code}?level=${level}`
+  chanlun(
+    code: string,
+    level: string,
+    startDate?: string,
+    endDate?: string,
+    limit = 500,
+    options?: GetCacheOptions,
+  ) {
+    const params = new URLSearchParams({ level, limit: String(limit) })
+    if (startDate) params.set('start_date', startDate)
+    if (endDate) params.set('end_date', endDate)
+    const query = params.toString()
+    const key = `GET:/chanlun/${code}?${query}`
     return withGetCached(
       key,
       API_CACHE_TTL.chanlun,
       () =>
-        api.get<ChanlunResult>(`/chanlun/${code}?level=${level}`, {
+        api.get<ChanlunResult>(`/chanlun/${code}?${query}`, {
           signal: options?.signal,
         }),
       options,

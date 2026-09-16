@@ -9,6 +9,16 @@
       @touchmove="onTouchMove"
       @touchend="onTouchEnd"
     />
+    <div v-show="!loading" class="drawing-toolbar" aria-label="手工划线工具">
+      <button :class="{ active: drawingTool === 'pan' }" @click="drawingTool = 'pan'">移</button>
+      <button :class="{ active: drawingTool === 'select' }" @click="drawingTool = 'select'">选</button>
+      <button :class="{ active: drawingTool === 'trend' }" @click="drawingTool = 'trend'">趋势</button>
+      <button :class="{ active: drawingTool === 'ray' }" @click="drawingTool = 'ray'">射线</button>
+      <button :class="{ active: drawingTool === 'horizontal' }" @click="drawingTool = 'horizontal'">水平</button>
+      <input v-model="drawingColor" type="color" aria-label="线条颜色" />
+      <select v-model.number="drawingWidth" aria-label="线条粗细"><option :value="1">1</option><option :value="2">2</option><option :value="3">3</option><option :value="4">4</option></select>
+      <button :disabled="!drawings.length" @click="clearDrawings">清</button>
+    </div>
 
     <!-- 底部状态栏 -->
     <div v-if="barInfoText" class="bar-info">{{ barInfoText }}</div>
@@ -63,12 +73,21 @@ import { setChartOptionKeepDataZoom } from '@/utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '@/composables/useDebounce'
 import { useKlineIndicators } from '@/composables/useKlineIndicators'
 import {
+  DrawingRepository,
+  buildManualDrawingGraphicChildren,
+  createDrawing,
+  type ChartDrawing,
+  type DrawingAnchor,
+  type DrawingTool,
+} from '@/utils/chartDrawings'
+import {
   type ChanlunOverlayPayload,
   CHANLUN_OVERLAY_THEME_MOBILE,
   buildChanlunGraphicChildren,
   buildChanlunOverlayCache,
   resolveDataZoomViewRange,
 } from '@/utils/chartOverlayCore'
+import { shouldLoadEarlierWindow } from '@/utils/klineWindow'
 
 const LONG_PRESS_DELAY = 400
 const SWIPE_THRESHOLD = 50
@@ -84,6 +103,8 @@ const props = defineProps<{
   xiangs?: XiangSegment[]
   aiSignal?: AISignal | null
   supportResistance?: SupportResistance[]
+  stockCode?: string
+  level?: string
   indicators?: IndicatorConfig
   zoomStart?: number
   zoomEnd?: number
@@ -96,11 +117,21 @@ const activeBiZhongshus = computed(() =>
     : (props.biZhongshus ?? []),
 )
 
-const emit = defineEmits<{ 'zoomChange': [start: number, end: number] }>()
+const emit = defineEmits<{
+  'zoomChange': [start: number, end: number]
+  'load-more-left': [visibleBars: number]
+}>()
 
 const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
+let lastEarlierLoadKey = ''
+const drawings = ref<ChartDrawing[]>([])
+const drawingTool = ref<DrawingTool>('pan')
+const drawingColor = ref('#f59e0b')
+const drawingWidth = ref(2)
+const draftDrawing = ref<ChartDrawing | null>(null)
+const drawingRepository = typeof window === 'undefined' ? null : new DrawingRepository(window.localStorage)
 
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
   ...(props.inclusions ?? []).flatMap(item => [item.start, item.end]),
@@ -128,6 +159,7 @@ type DataZoomOption = { startValue?: number; endValue?: number; start?: number; 
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
+    autoChanlun: true,
     inclusions: true,
     divergences: true,
     bis: true, biZhongshus: true, xiangs: true, zhongshus: true,
@@ -255,6 +287,7 @@ function buildOverlayData(): ChanlunOverlayPayload {
     aiSignal: props.aiSignal,
     supportResistance: props.supportResistance,
     flags: {
+      autoChanlun: ind.autoChanlun,
       inclusions: ind.inclusions,
       divergences: ind.divergences,
       bis: ind.bis,
@@ -269,10 +302,86 @@ function buildOverlayData(): ChanlunOverlayPayload {
   })
 }
 
+function drawingScope(): [string, string] | null {
+  const code = props.stockCode?.trim()
+  const level = props.level?.trim()
+  return code && level ? [code, level] : null
+}
+
+function persistDrawings() {
+  const scope = drawingScope()
+  if (scope && drawingRepository) drawingRepository.save(scope[0], scope[1], drawings.value)
+}
+
+function loadDrawings() {
+  const scope = drawingScope()
+  drawings.value = scope && drawingRepository ? drawingRepository.load(scope[0], scope[1]) : []
+  draftDrawing.value = null
+  queueGraphic()
+}
+
+function manualDrawingChildren(viewS: number, viewE: number) {
+  return buildManualDrawingGraphicChildren({
+    drawings: draftDrawing.value ? [...drawings.value, draftDrawing.value] : drawings.value,
+    dates: lastDates,
+    viewStart: viewS,
+    viewEnd: viewE,
+    pixelAt: pixelAtIdx,
+  })
+}
+
+function anchorFromTouch(touch: Touch): DrawingAnchor | null {
+  if (!chart || !chartRef.value || !lastDates.length) return null
+  const rect = chartRef.value.getBoundingClientRect()
+  try {
+    const result = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [touch.clientX - rect.left, touch.clientY - rect.top]) as [string | number, number]
+    const rawIndex = typeof result?.[0] === 'number' ? Math.round(result[0]) : lastDates.indexOf(String(result?.[0]))
+    const index = Math.max(0, Math.min(lastDates.length - 1, rawIndex))
+    const price = Number(result?.[1])
+    return Number.isFinite(price) ? { date: lastDates[index], price } : null
+  } catch {
+    return null
+  }
+}
+
+function beginManualTouch(touch: Touch): boolean {
+  const tool = drawingTool.value
+  if (tool === 'pan' || tool === 'select') return false
+  const anchor = anchorFromTouch(touch)
+  if (!anchor) return false
+  draftDrawing.value = createDrawing({ id: 'draft', type: tool, start: anchor, end: anchor, color: drawingColor.value, width: drawingWidth.value })
+  queueGraphic()
+  return true
+}
+
+function moveManualTouch(touch: Touch): boolean {
+  const anchor = anchorFromTouch(touch)
+  if (!anchor || !draftDrawing.value) return false
+  draftDrawing.value = { ...draftDrawing.value, end: anchor }
+  queueGraphic()
+  return true
+}
+
+function finishManualTouch() {
+  if (!draftDrawing.value) return false
+  drawings.value = [...drawings.value, createDrawing({ ...draftDrawing.value, id: undefined })]
+  draftDrawing.value = null
+    drawingTool.value = 'pan'
+  persistDrawings()
+  queueGraphic()
+  return true
+}
+
+function clearDrawings() {
+  drawings.value = []
+  persistDrawings()
+  queueGraphic()
+}
+
 function applyGraphicOverlay() {
   if (!chart) return
   const data = overlayCache
-  if (!data || data._n <= 0 || !lastDates.length) {
+  if (!lastDates.length) {
     chart.setOption({ graphic: [] }, { replaceMerge: ['graphic'] })
     return
   }
@@ -281,16 +390,14 @@ function applyGraphicOverlay() {
   const { viewS, viewE } = resolveDataZoomViewRange(lastDates.length, opt?.dataZoom)
   const [gridLeft, gridRight] = getGridBounds()
 
-  const children = buildChanlunGraphicChildren({
-    data,
-    viewS,
-    viewE,
-    gridLeft,
-    gridRight,
-    pixelAtIdx,
-    theme: CHANLUN_OVERLAY_THEME_MOBILE,
-    priceAtIdx: i => lastDisplayKlines[i]?.close ?? 0,
-  })
+  const children = data && data._n > 0
+    ? buildChanlunGraphicChildren({
+        data, viewS, viewE, gridLeft, gridRight, pixelAtIdx,
+        theme: CHANLUN_OVERLAY_THEME_MOBILE,
+        priceAtIdx: i => lastDisplayKlines[i]?.close ?? 0,
+      })
+    : []
+  children.push(...manualDrawingChildren(viewS, viewE))
 
   chart.setOption({
     graphic: [{ id: 'chanlun-overlay', type: 'group', children, z: 100, silent: true }]
@@ -526,6 +633,7 @@ function initChart() {
   setBarInfoByIndex(props.klines.length - 1)
   overlayCache = buildOverlayData()
   queueGraphic()
+  loadDrawings()
 
   chart.getZr().on('globalout', () => setBarInfoByIndex(props.klines.length - 1))
   chart.on('updateAxisPointer', (ev: unknown) => {
@@ -542,6 +650,14 @@ function initChart() {
   chart.on('dataZoom', () => {
     const dz = (chart?.getOption() as { dataZoom?: DataZoomOption[] } | undefined)?.dataZoom?.[0]
     if (dz && dz.start != null && dz.end != null) emit('zoomChange', dz.start, dz.end)
+    const { viewS, viewE } = resolveDataZoomViewRange(lastDates.length, dz ? [dz] : undefined)
+    if (shouldLoadEarlierWindow({ viewStart: viewS, viewEnd: viewE, total: lastDates.length })) {
+      const key = `${lastDates[0] ?? ''}:${viewS}:${viewE}`
+      if (key !== lastEarlierLoadKey) {
+        lastEarlierLoadKey = key
+        emit('load-more-left', viewE - viewS + 1)
+      }
+    }
     queueAdaptiveTimeAxis()
     queueGraphic()
   })
@@ -561,6 +677,7 @@ function applyKlineUpdate() {
   const sig = klineSeriesSignature(props.klines)
   if (sig === lastKlineSig) return
   lastKlineSig = sig
+  lastEarlierLoadKey = ''
   updateChart()
 }
 
@@ -621,6 +738,10 @@ onUnmounted(() => {
 })
 
 function onTouchStart(e: TouchEvent) {
+  if (e.touches.length === 1 && beginManualTouch(e.touches[0])) {
+    e.preventDefault()
+    return
+  }
   if (e.touches.length === 1) {
     touchCount = 1
     touchStartX = e.touches[0].clientX
@@ -639,6 +760,10 @@ function onTouchStart(e: TouchEvent) {
 }
 
 function onTouchMove(e: TouchEvent) {
+  if (e.touches.length === 1 && draftDrawing.value) {
+    if (moveManualTouch(e.touches[0])) e.preventDefault()
+    return
+  }
   if (e.touches.length === 1) {
     const dx = e.touches[0].clientX - touchStartX
     const dy = e.touches[0].clientY - touchStartY
@@ -659,6 +784,10 @@ function onTouchMove(e: TouchEvent) {
 }
 
 function onTouchEnd(e: TouchEvent) {
+  if (draftDrawing.value) {
+    finishManualTouch()
+    return
+  }
   if (longPressTimer) clearTimeout(longPressTimer)
   longPressTimer = null
   if (e.changedTouches.length === 1 && !isScrolling) {
@@ -678,6 +807,8 @@ watch(
   applyKlineUpdate
 )
 
+watch(() => [props.stockCode, props.level], loadDrawings)
+
 watch(
   () => [props.inclusions, props.bis, props.biZhongshus, props.sameLevelBiZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
   updateOverlayOnly,
@@ -686,6 +817,7 @@ watch(
 
 watch(
   () => [
+    props.indicators?.autoChanlun,
     props.indicators?.inclusions,
     props.indicators?.divergences,
     props.indicators?.bis,
@@ -737,6 +869,34 @@ watch(
   transition: opacity 0.22s ease;
 }
 .kline-chart.chart-ready { opacity: 1; }
+
+.drawing-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+.drawing-toolbar button,
+.drawing-toolbar select {
+  min-height: 24px;
+  padding: 2px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+.drawing-toolbar button.active { color: #38bdf8; border-color: #38bdf8; background: rgba(56, 189, 248, 0.12); }
+.drawing-toolbar button:disabled { opacity: 0.45; }
+.drawing-toolbar input { width: 24px; height: 24px; padding: 1px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); }
 
 .bar-info {
   position: absolute;

@@ -35,9 +35,19 @@ async def analyze_chanlun(
         "daily",
         pattern="^(1min|5min|15min|30min|60min|daily|weekly|monthly)$",
     ),
+    limit: int = Query(DEFAULT_KLINE_LIMIT, ge=20, le=5000),
+    start_date: str | None = Query(None, description="开始日期 YYYY-MM-DD"),
+    end_date: str | None = Query(None, description="结束日期 YYYY-MM-DD"),
 ):
     check_chanlun_rate_limits(client_ip(request))
-    result = await asyncio.to_thread(run_analysis, code, level)
+    result = await asyncio.to_thread(
+        run_analysis,
+        code,
+        level,
+        kline_limit=limit,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return serialize_chanlun_analysis(result)
 
 

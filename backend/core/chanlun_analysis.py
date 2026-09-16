@@ -1,6 +1,7 @@
 """缠论分析：K 线拉取 + 引擎（供路由与 AI 复用）。"""
 from __future__ import annotations
 
+import math
 import pandas as pd
 from fastapi import HTTPException
 
@@ -12,15 +13,24 @@ from utils import chanlun_cache, chanlun_multi_cache
 
 DEFAULT_KLINE_LIMIT = 500
 SCREENING_KLINE_LIMIT = 200
+MAX_INTRADAY_KLINE_LIMIT = 5000
 
 
-def chanlun_cache_key(code: str, level: str, kline_limit: int = DEFAULT_KLINE_LIMIT) -> str:
-    """缓存键含 K 线窗口长度，避免选股(200)与全量(500)互相污染。"""
-    return f"{code}:{level}:{kline_limit}"
+def chanlun_cache_key(
+    code: str,
+    level: str,
+    kline_limit: int = DEFAULT_KLINE_LIMIT,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> str:
+    """缓存键含窗口与日期范围，避免不同历史区间复用最近行情。"""
+    return f"{code}:{level}:{kline_limit}:{start_date or '-'}:{end_date or '-'}"
 
 
 def level_to_period(level: str) -> str:
     mapping = {
+        # 当前 fallback 分钟源只稳定提供 5/15/30/60 分钟历史；1 分钟在
+        # iFinD 可用时会由其原生返回，legacy 则兼容到 5 分钟，避免空图。
         "1min": "5",
         "5min": "5",
         "15min": "15",
@@ -33,14 +43,59 @@ def level_to_period(level: str) -> str:
     return mapping.get(level, "daily")
 
 
-def run_analysis(code: str, level: str, kline_limit: int = DEFAULT_KLINE_LIMIT) -> ChanlunAnalysis:
-    cache_key = chanlun_cache_key(code, level, kline_limit)
+def resolve_kline_limit(
+    level: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    default_limit: int = DEFAULT_KLINE_LIMIT,
+) -> int:
+    """按用户选定日期范围估算分钟 K 线数量，避免默认 500 根截断历史。"""
+    period = level_to_period(level)
+    if not start_date:
+        return default_limit
+    start = pd.to_datetime(start_date, errors="coerce")
+    end = pd.to_datetime(end_date, errors="coerce") if end_date else pd.Timestamp.now()
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return default_limit
+    days = max(1, (end.normalize() - start.normalize()).days)
+    if period.isdigit():
+        bars_per_day = {"1": 240, "5": 48, "15": 16, "30": 8, "60": 4}.get(period, 8)
+        estimated = math.ceil((days * 5 / 7 + 1) * bars_per_day) + bars_per_day * 5
+        maximum = MAX_INTRADAY_KLINE_LIMIT
+    elif period == "daily":
+        estimated = math.ceil(days * 5 / 7) + 10
+        maximum = 2000
+    elif period == "weekly":
+        estimated = math.ceil(days / 7) + 4
+        maximum = 2000
+    else:
+        estimated = math.ceil(days / 30) + 3
+        maximum = 2000
+    return min(maximum, max(default_limit, estimated))
+
+
+def run_analysis(
+    code: str,
+    level: str,
+    kline_limit: int = DEFAULT_KLINE_LIMIT,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> ChanlunAnalysis:
+    kline_limit = resolve_kline_limit(level, start_date, end_date, kline_limit)
+    cache_key = chanlun_cache_key(code, level, kline_limit, start_date, end_date)
     cached = chanlun_cache.get(cache_key)
     if cached is not None:
         return cached
 
     period = level_to_period(level)
-    df = get_kline_hist(code, period=period, start_date=None, adjust="qfq", limit=kline_limit)
+    df = get_kline_hist(
+        code,
+        period=period,
+        start_date=start_date,
+        end_date=end_date,
+        adjust="qfq",
+        limit=kline_limit,
+    )
 
     if df.empty or len(df) < 20:
         raise HTTPException(

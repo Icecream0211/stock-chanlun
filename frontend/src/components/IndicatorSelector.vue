@@ -46,6 +46,15 @@
         <div class="indicator-group">
           <div class="group-title">缠论元素</div>
           <div class="indicator-list">
+            <label class="indicator-item auto-chanlun-toggle">
+              <input
+                type="checkbox"
+                :checked="indicators.autoChanlun"
+                @change="store.toggleIndicator('autoChanlun')"
+              />
+              <span class="indicator-dot" style="background: #A78BFA"></span>
+              <span>自动缠论绘制</span>
+            </label>
             <label class="indicator-item">
               <input
                 type="checkbox"
@@ -341,6 +350,12 @@ function hideAll() {
 .indicator-item span:last-child {
   font-size: 0.85rem;
   color: var(--text-primary);
+}
+
+.auto-chanlun-toggle {
+  margin-bottom: 3px;
+  border: 1px solid rgba(167, 139, 250, 0.32);
+  background: rgba(167, 139, 250, 0.08);
 }
 
 .center-view {

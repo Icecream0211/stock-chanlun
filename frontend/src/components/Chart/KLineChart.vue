@@ -30,6 +30,19 @@
       :class="{ 'chart-ready': !loading }"
       :style="{ height: `${chartHeightPx}px` }"
     />
+    <div v-show="!loading" class="drawing-toolbar" aria-label="手工划线工具">
+      <button :class="{ active: drawingTool === 'pan' }" title="左右拖动平移图表" @click="drawingTool = 'pan'">移动</button>
+      <button :class="{ active: drawingTool === 'select' }" title="选择/拖动端点" @click="drawingTool = 'select'">选择</button>
+      <button :class="{ active: drawingTool === 'trend' }" title="两点趋势线" @click="drawingTool = 'trend'">趋势线</button>
+      <button :class="{ active: drawingTool === 'ray' }" title="向右延长" @click="drawingTool = 'ray'">射线</button>
+      <button :class="{ active: drawingTool === 'horizontal' }" title="水平价位线" @click="drawingTool = 'horizontal'">水平线</button>
+      <input v-model="drawingColor" class="drawing-color" type="color" title="线条颜色" aria-label="线条颜色" />
+      <select v-model.number="drawingWidth" title="线条粗细" aria-label="线条粗细">
+        <option :value="1">1px</option><option :value="2">2px</option><option :value="3">3px</option><option :value="4">4px</option><option :value="5">5px</option><option :value="6">6px</option>
+      </select>
+      <button :disabled="!selectedDrawingId" title="删除选中划线" @click="removeSelectedDrawing">删除</button>
+      <button :disabled="!drawings.length" title="清除本标的当前周期的手工线" @click="clearDrawings">清空</button>
+    </div>
     <div v-if="barInfoText" class="bar-info">{{ barInfoText }}</div>
   </div>
 </template>
@@ -51,6 +64,16 @@ import { setChartOptionKeepDataZoom } from '../../utils/chartEchartsHelpers'
 import { useDebouncedCallback } from '../../composables/useDebounce'
 import { useKlineIndicators } from '../../composables/useKlineIndicators'
 import {
+  DrawingRepository,
+  buildManualDrawingGraphicChildren,
+  createDrawing,
+  type ChartDrawing,
+  type DrawingAnchor,
+  type DrawingTool,
+} from '../../utils/chartDrawings'
+import { resolveChartGesturePolicy } from '../../utils/chartNavigation'
+import { shouldLoadEarlierWindow } from '../../utils/klineWindow'
+import {
   type ChanlunOverlayPayload,
   CHANLUN_OVERLAY_THEME_PC,
   buildChanlunGraphicChildren,
@@ -69,9 +92,12 @@ const props = defineProps<{
   xiangs?: XiangSegment[]
   aiSignal?: AISignal | null
   supportResistance?: SupportResistance[]
+  stockCode?: string
+  level?: string
   indicators?: IndicatorConfig
   loading?: boolean
 }>()
+const emit = defineEmits<{ 'load-more-left': [visibleBars: number] }>()
 
 /** 不同口径只能择一绘制，避免“延伸大框”与同级分解框同时遮挡 K 线。 */
 const activeBiZhongshus = computed(() =>
@@ -83,6 +109,17 @@ const activeBiZhongshus = computed(() =>
 const chartRef = ref<HTMLDivElement | null>(null)
 const barInfoText = ref('')
 let chart: echarts.ECharts | null = null
+let lastEarlierLoadKey = ''
+
+const drawings = ref<ChartDrawing[]>([])
+/** 默认浏览模式：左键拖动平移时间轴，绘图必须显式选工具。 */
+const drawingTool = ref<DrawingTool>('pan')
+const drawingColor = ref('#f59e0b')
+const drawingWidth = ref(2)
+const selectedDrawingId = ref<string | null>(null)
+const draftDrawing = ref<ChartDrawing | null>(null)
+const drawingRepository = typeof window === 'undefined' ? null : new DrawingRepository(window.localStorage)
+let dragAnchor: { drawingId: string; anchor: 'start' | 'end' } | null = null
 
 /** 主图渲染用降采样序列；所有结构端点作为硬锚点，避免降采样导致吸附错位。 */
 const displayKlines = computed(() => downsampleKlines(props.klines, undefined, [
@@ -99,6 +136,7 @@ const klineIndicators = useKlineIndicators(displayKlines)
 function getIndicators(): Required<IndicatorConfig> {
   return {
     ma5: true, ma20: true, ma60: true,
+    autoChanlun: true,
     inclusions: true,
     divergences: true,
     bis: true, biZhongshus: true, xiangs: true, zhongshus: true, signals: true, aiLines: false,
@@ -456,7 +494,12 @@ function buildOption() {
     xAxis: xAxes,
     yAxis: yAxes,
     dataZoom: [
-      { type: 'inside', xAxisIndex: xAxisIndexes, start: 70, end: 100 },
+      {
+        type: 'inside', xAxisIndex: xAxisIndexes, start: 70, end: 100,
+        zoomOnMouseWheel: resolveChartGesturePolicy(drawingTool.value).zoomOnMouseWheel,
+        moveOnMouseWheel: resolveChartGesturePolicy(drawingTool.value).moveOnMouseWheel,
+        moveOnMouseMove: resolveChartGesturePolicy(drawingTool.value).moveOnMouseDrag,
+      },
       {
         type: 'slider',
         xAxisIndex: xAxisIndexes,
@@ -558,10 +601,182 @@ function pixelAtIdx(i: number, price: number): [number, number] | null {
   return pixelAt(lastDates[i], price)
 }
 
+function drawingScope(): [string, string] | null {
+  const code = props.stockCode?.trim()
+  const level = props.level?.trim()
+  return code && level ? [code, level] : null
+}
+
+function persistDrawings() {
+  const scope = drawingScope()
+  if (scope && drawingRepository) drawingRepository.save(scope[0], scope[1], drawings.value)
+}
+
+function loadDrawings() {
+  const scope = drawingScope()
+  drawings.value = scope && drawingRepository ? drawingRepository.load(scope[0], scope[1]) : []
+  selectedDrawingId.value = null
+  draftDrawing.value = null
+  queueChanlunGraphic()
+}
+
+function currentDrawingView() {
+  const option = chart?.getOption() as { dataZoom?: DataZoomOption[] } | undefined
+  return resolveDataZoomViewRange(lastDates.length, option?.dataZoom)
+}
+
+function manualDrawingChildren(viewS: number, viewE: number) {
+  return buildManualDrawingGraphicChildren({
+    drawings: draftDrawing.value ? [...drawings.value, draftDrawing.value] : drawings.value,
+    dates: lastDates,
+    viewStart: viewS,
+    viewEnd: viewE,
+    pixelAt: pixelAtIdx,
+    selectedId: draftDrawing.value ? null : selectedDrawingId.value,
+  })
+}
+
+function anchorFromPointer(event: unknown): DrawingAnchor | null {
+  if (!chart || !lastDates.length) return null
+  const source = event as { offsetX?: number; offsetY?: number; event?: { offsetX?: number; offsetY?: number } }
+  const x = Number(source.offsetX ?? source.event?.offsetX)
+  const y = Number(source.offsetY ?? source.event?.offsetY)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  try {
+    const result = chart.convertFromPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [x, y]) as [string | number, number]
+    const rawIndex = typeof result?.[0] === 'number' ? Math.round(result[0]) : lastDates.indexOf(String(result?.[0]))
+    const index = Math.max(0, Math.min(lastDates.length - 1, rawIndex))
+    const price = Number(result?.[1])
+    if (!Number.isFinite(price)) return null
+    return { date: lastDates[index], price }
+  } catch {
+    return null
+  }
+}
+
+function drawingPoints(drawing: ChartDrawing): [[number, number], [number, number]] | null {
+  const startIndex = lastDates.indexOf(drawing.start.date)
+  const endIndex = lastDates.indexOf(drawing.end.date)
+  if (startIndex < 0 || endIndex < 0) return null
+  const start = pixelAtIdx(startIndex, drawing.start.price)
+  let end = pixelAtIdx(endIndex, drawing.end.price)
+  if (!start || !end) return null
+  const { viewE } = currentDrawingView()
+  if (drawing.type === 'horizontal') end = pixelAtIdx(viewE, drawing.start.price)
+  if (drawing.type === 'ray') {
+    const delta = endIndex - startIndex
+    if (!delta) return null
+    end = pixelAtIdx(viewE, drawing.end.price + (drawing.end.price - drawing.start.price) / delta * (viewE - endIndex))
+  }
+  return end ? [start, end] : null
+}
+
+function distanceToSegment(x: number, y: number, a: [number, number], b: [number, number]): number {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const lengthSquared = dx * dx + dy * dy
+  if (!lengthSquared) return Math.hypot(x - a[0], y - a[1])
+  const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / lengthSquared))
+  return Math.hypot(x - (a[0] + t * dx), y - (a[1] + t * dy))
+}
+
+function hitDrawing(event: unknown): { drawingId: string; anchor?: 'start' | 'end' } | null {
+  const source = event as { offsetX?: number; offsetY?: number; event?: { offsetX?: number; offsetY?: number } }
+  const x = Number(source.offsetX ?? source.event?.offsetX)
+  const y = Number(source.offsetY ?? source.event?.offsetY)
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null
+  for (const drawing of [...drawings.value].reverse()) {
+    const points = drawingPoints(drawing)
+    if (!points) continue
+    if (Math.hypot(x - points[0][0], y - points[0][1]) <= 10) return { drawingId: drawing.id, anchor: 'start' }
+    if (drawing.type !== 'horizontal' && Math.hypot(x - points[1][0], y - points[1][1]) <= 10) return { drawingId: drawing.id, anchor: 'end' }
+    if (distanceToSegment(x, y, points[0], points[1]) <= Math.max(7, drawing.width + 4)) return { drawingId: drawing.id }
+  }
+  return null
+}
+
+function onDrawingMouseDown(event: unknown) {
+  if (!chart || !lastDates.length) return
+  const tool = drawingTool.value
+  if (tool === 'pan') return
+  if (tool === 'select') {
+    const hit = hitDrawing(event)
+    selectedDrawingId.value = hit?.drawingId ?? null
+    const selected = drawings.value.find(drawing => drawing.id === hit?.drawingId)
+    if (selected) {
+      drawingColor.value = selected.color
+      drawingWidth.value = selected.width
+    }
+    dragAnchor = hit?.anchor ? { drawingId: hit.drawingId, anchor: hit.anchor } : null
+    queueChanlunGraphic()
+    return
+  }
+  const anchor = anchorFromPointer(event)
+  if (!anchor) return
+  draftDrawing.value = createDrawing({
+    id: 'draft', type: tool, start: anchor, end: anchor,
+    color: drawingColor.value, width: drawingWidth.value,
+  })
+  queueChanlunGraphic()
+}
+
+function onDrawingMouseMove(event: unknown) {
+  const anchor = anchorFromPointer(event)
+  if (!anchor) return
+  if (draftDrawing.value) {
+    draftDrawing.value = { ...draftDrawing.value, end: anchor }
+    queueChanlunGraphic()
+    return
+  }
+  if (!dragAnchor) return
+  drawings.value = drawings.value.map(drawing => drawing.id === dragAnchor?.drawingId
+    ? { ...drawing, [dragAnchor.anchor]: anchor }
+    : drawing)
+  queueChanlunGraphic()
+}
+
+function onDrawingMouseUp() {
+  if (draftDrawing.value) {
+    const drawing = createDrawing({ ...draftDrawing.value, id: undefined })
+    drawings.value = [...drawings.value, drawing]
+    selectedDrawingId.value = drawing.id
+    draftDrawing.value = null
+    drawingTool.value = 'pan'
+    persistDrawings()
+  }
+  if (dragAnchor) persistDrawings()
+  dragAnchor = null
+  queueChanlunGraphic()
+}
+
+function updateSelectedStyle() {
+  if (!selectedDrawingId.value) return
+  drawings.value = drawings.value.map(drawing => drawing.id === selectedDrawingId.value
+    ? { ...drawing, color: drawingColor.value, width: drawingWidth.value }
+    : drawing)
+  persistDrawings()
+  queueChanlunGraphic()
+}
+
+function removeSelectedDrawing() {
+  if (!selectedDrawingId.value) return
+  drawings.value = drawings.value.filter(drawing => drawing.id !== selectedDrawingId.value)
+  selectedDrawingId.value = null
+  persistDrawings()
+  queueChanlunGraphic()
+}
+
+function clearDrawings() {
+  drawings.value = []
+  selectedDrawingId.value = null
+  persistDrawings()
+  queueChanlunGraphic()
+}
+
 function applyChanlunGraphic() {
   if (!chart) return
   const data = chanlunOverlayCache
-  if (!data || data._n <= 0 || !lastDates.length) {
+  if (!lastDates.length) {
     chart.setOption({ graphic: [] }, { replaceMerge: ['graphic'] })
     return
   }
@@ -582,16 +797,14 @@ function applyChanlunGraphic() {
     }
   } catch { /* ignore */ }
 
-  const children = buildChanlunGraphicChildren({
-    data,
-    viewS,
-    viewE,
-    gridLeft,
-    gridRight,
-    pixelAtIdx,
-    theme: CHANLUN_OVERLAY_THEME_PC,
-    priceAtIdx: i => displayKlines.value[i]?.close ?? 0,
-  })
+  const children = data && data._n > 0
+    ? buildChanlunGraphicChildren({
+        data, viewS, viewE, gridLeft, gridRight, pixelAtIdx,
+        theme: CHANLUN_OVERLAY_THEME_PC,
+        priceAtIdx: i => displayKlines.value[i]?.close ?? 0,
+      })
+    : []
+  children.push(...manualDrawingChildren(viewS, viewE))
 
   chart.setOption({
     graphic: [{ id: 'chanlun-overlay', type: 'group', children, z: 100, silent: true }]
@@ -613,6 +826,15 @@ function onChartFinished() {
 }
 
 function onChartDataZoom() {
+  const option = chart?.getOption() as { dataZoom?: DataZoomOption[] } | undefined
+  const { viewS, viewE } = resolveDataZoomViewRange(lastDates.length, option?.dataZoom)
+  if (shouldLoadEarlierWindow({ viewStart: viewS, viewEnd: viewE, total: lastDates.length })) {
+    const key = `${lastDates[0] ?? ''}:${viewS}:${viewE}`
+    if (key !== lastEarlierLoadKey) {
+      lastEarlierLoadKey = key
+      emit('load-more-left', viewE - viewS + 1)
+    }
+  }
   queueAdaptiveTimeAxis()
   queueChanlunGraphic()
 }
@@ -635,16 +857,42 @@ function onChartGlobalOut() {
   if (n > 0) setBarInfoByIndex(n - 1)
 }
 
+/** 普通滚轮不被 ECharts 截获，交给浏览器滚动页面；Shift 才缩放 K 线。 */
+function onNativeChartWheel(event: WheelEvent) {
+  if (event.shiftKey) {
+    event.preventDefault()
+    return
+  }
+  event.stopImmediatePropagation()
+}
+
+function syncChartGesturePolicy() {
+  if (!chart) return
+  const policy = resolveChartGesturePolicy(drawingTool.value)
+  chart.setOption({
+    dataZoom: [{
+      zoomOnMouseWheel: policy.zoomOnMouseWheel,
+      moveOnMouseWheel: policy.moveOnMouseWheel,
+      moveOnMouseMove: policy.moveOnMouseDrag,
+    }],
+  })
+}
+
 function initChart() {
   if (!chartRef.value) return
   chart = echarts.init(chartRef.value)
   chart.setOption(buildOption())
+  chartRef.value.addEventListener('wheel', onNativeChartWheel, { capture: true, passive: false })
   setBarInfoByIndex(displayKlines.value.length - 1)
   chart.getZr().on('globalout', onChartGlobalOut)
+  chart.getZr().on('mousedown', onDrawingMouseDown)
+  chart.getZr().on('mousemove', onDrawingMouseMove)
+  chart.getZr().on('mouseup', onDrawingMouseUp)
   chart.on('updateAxisPointer', onAxisPointerUpdate)
   chart.on('finished', onChartFinished)
   chart.on('dataZoom', onChartDataZoom)
   queueChanlunGraphic()
+  loadDrawings()
 }
 
 function updateChart() {
@@ -692,6 +940,7 @@ function syncChanlunOverlayCache() {
     aiSignal: props.aiSignal,
     supportResistance: props.supportResistance,
     flags: {
+      autoChanlun: ind.autoChanlun,
       inclusions: ind.inclusions,
       divergences: ind.divergences,
       bis: ind.bis,
@@ -740,9 +989,13 @@ onUnmounted(() => {
     chart.off('finished', onChartFinished)
     chart.off('dataZoom', onChartDataZoom)
     chart.getZr().off('globalout', onChartGlobalOut)
+    chart.getZr().off('mousedown', onDrawingMouseDown)
+    chart.getZr().off('mousemove', onDrawingMouseMove)
+    chart.getZr().off('mouseup', onDrawingMouseUp)
     chart.dispose()
     chart = null
   }
+  chartRef.value?.removeEventListener('wheel', onNativeChartWheel, true)
   window.removeEventListener('resize', onResize)
 })
 
@@ -756,14 +1009,23 @@ function applyKlineUpdate() {
 }
 
 watch(
+  drawingTool,
+  syncChartGesturePolicy,
+)
+
+watch(
   () => props.klines,
   (kl) => {
     const sig = klineSeriesSignature(kl)
     if (sig === lastKlineSig) return
     lastKlineSig = sig
+    lastEarlierLoadKey = ''
     applyKlineUpdate()
   }
 )
+
+watch(() => [props.stockCode, props.level], loadDrawings)
+watch([drawingColor, drawingWidth], updateSelectedStyle)
 
 watch(
   () => [props.inclusions, props.bis, props.biZhongshus, props.sameLevelBiZhongshus, props.zhongshus, props.signals, props.xiangs, props.aiSignal, props.supportResistance],
@@ -774,6 +1036,7 @@ watch(
 /** 缠论/AI 线等仅影响 graphic，不必重建 K 线 series */
 watch(
   () => [
+    props.indicators?.autoChanlun,
     props.indicators?.inclusions,
     props.indicators?.divergences,
     props.indicators?.bis,
@@ -814,6 +1077,7 @@ watch(chartHeightPx, () => {
 
 <style scoped>
 .kline-wrap {
+  position: relative;
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -827,6 +1091,40 @@ watch(chartHeightPx, () => {
   transition: opacity 0.22s ease;
 }
 .kline-chart.chart-ready { opacity: 1; }
+.drawing-toolbar {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-card) 88%, transparent);
+  box-shadow: 0 3px 12px rgba(15, 23, 42, 0.12);
+  backdrop-filter: blur(6px);
+}
+.drawing-toolbar button,
+.drawing-toolbar select {
+  min-height: 26px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  background: var(--bg-card);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.drawing-toolbar button.active {
+  color: #0ea5e9;
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+}
+.drawing-toolbar button:disabled { opacity: 0.45; cursor: not-allowed; }
+.drawing-color { width: 28px; height: 26px; padding: 1px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg-card); cursor: pointer; }
 .bar-info {
   padding: 8px 12px 10px;
   font-size: 12px;

@@ -171,6 +171,11 @@
                 <span v-if="!startDate && !endDate">时间筛选</span>
                 <span v-else class="date-filter-active-text">{{ formatFilterText() }}</span>
               </button>
+              <span
+                v-if="loadedRangeText"
+                class="loaded-range-hint"
+                :title="`已在本次浏览中加载 ${loadedRangeText}；继续向左拖动会按当前周期补一屏数据。`"
+              >已加载 {{ loadedRangeText }}</span>
               <div v-if="showDatePanel" class="date-panel">
                 <div class="date-panel-row">
                   <label class="date-panel-label">开始日期</label>
@@ -321,8 +326,11 @@
           :signals="store.chanlunResult?.signals || []"
           :ai-signal="store.aiSignal"
           :support-resistance="store.chanlunResult?.supportResistance || []"
+          :stock-code="stockCode"
+          :level="currentLevel"
           :indicators="store.indicators"
           :loading="store.loadingChart"
+          @load-more-left="store.loadEarlierKlines"
         />
       </div>
 
@@ -533,12 +541,19 @@ function formatFilterText() {
   if (startDate.value && endDate.value) {
     return `${startDate.value} ~ ${endDate.value}`
   } else if (startDate.value) {
-    return `${startDate.value} 至今`
+    return `${startDate.value} 起（按需）`
   } else if (endDate.value) {
     return `~ ${endDate.value}`
   }
   return '时间筛选'
 }
+
+const loadedRangeText = computed(() => {
+  const first = store.klines[0]?.date?.slice(0, 10)
+  const last = store.klines.at(-1)?.date?.slice(0, 10)
+  if (!first || !last) return ''
+  return `${first} ~ ${last}`
+})
 
 function resetDateFilter() {
   startDate.value = getTwoYearsAgo()
@@ -1246,6 +1261,15 @@ watch(layout, persistLayout, { deep: true })
   max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.loaded-range-hint {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  color: var(--text-muted);
 }
 
 .date-panel {

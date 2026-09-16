@@ -64,6 +64,45 @@ describe('chartOverlayCore', () => {
     expect(cache.bis[0]._e).toBe(2)
   })
 
+  it('does not create any automatic Chanlun structure when its switches are off', () => {
+    const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
+    const klines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))
+    const bi = { id: 'b1', start: dates[0], end: dates[2], direction: 'up' as const, high: 12, low: 9, start_price: 9, end_price: 12 }
+    const center = { id: 'z1', start: dates[0], end: dates[2], range_high: 11, range_low: 10, zg: 11, zd: 10, gg: 12, dd: 9, xiang_ids: ['b1'], level: 1 }
+    const xiang = { id: 'x1', start: dates[0], end: dates[2], direction: 'up' as const, high: 12, low: 9, start_price: 9, end_price: 12, bi_ids: ['b1'] }
+
+    const cache = buildChanlunOverlayCache({
+      dates, seriesKlines: klines, bis: [bi], biZhongshus: [center], xiangs: [xiang], zhongshus: [center], signals: [],
+      flags: { inclusions: false, divergences: false, bis: false, biZhongshus: false, xiangs: false, zhongshus: false, signals: false, aiLines: false, supportResistance: false },
+    })
+
+    expect(cache.bis).toEqual([])
+    expect(cache.biZhongshus).toEqual([])
+    expect(cache.xiangs).toEqual([])
+    expect(cache.zhongshus).toEqual([])
+  })
+
+  it('master automatic-drawing switch hides every automatic Chanlun layer at once', () => {
+    const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
+    const klines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))
+    const bi = { id: 'b1', start: dates[0], end: dates[2], direction: 'up' as const, high: 12, low: 9, start_price: 9, end_price: 12 }
+    const center = { id: 'z1', start: dates[0], end: dates[2], range_high: 11, range_low: 10, zg: 11, zd: 10, gg: 12, dd: 9, xiang_ids: ['b1'], level: 1 }
+
+    const cache = buildChanlunOverlayCache({
+      dates, seriesKlines: klines, bis: [bi], biZhongshus: [center], zhongshus: [center], signals: [],
+      flags: { autoChanlun: false, inclusions: true, divergences: true, bis: true, biZhongshus: true, xiangs: true, zhongshus: true, signals: true, aiLines: true, supportResistance: true },
+      dualCrossIndices: [1],
+    })
+
+    expect(cache.bis).toEqual([])
+    expect(cache.biZhongshus).toEqual([])
+    expect(cache.zhongshus).toEqual([])
+    expect(cache.signals).toEqual([])
+    expect(cache.aiSignal).toBeNull()
+    expect(cache.supportResistance).toEqual([])
+    expect(cache.dualCrossIndices).toEqual([])
+  })
+
   it('renders inclusion as a compact bracket with a tiny count label', () => {
     const dates = ['2024-01-02', '2024-01-03', '2024-01-04']
     const seriesKlines = dates.map(date => ({ date, open: 10, high: 12, low: 9, close: 10, volume: 1 }))

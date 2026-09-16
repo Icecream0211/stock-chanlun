@@ -41,6 +41,14 @@
               <div class="ind-group-title">缠论元素</div>
               <div class="ind-chips">
                 <button
+                  class="ind-chip auto-chanlun-toggle"
+                  :class="{ active: cfg.autoChanlun }"
+                  @click="store.toggleIndicator('autoChanlun')"
+                >
+                  <span class="chip-dot" style="background: #A78BFA" />
+                  自动缠论绘制
+                </button>
+                <button
                   v-for="ind in chanlunInds"
                   :key="ind.key"
                   class="ind-chip"
@@ -280,6 +288,11 @@ function hideAll() {
   border-color: rgba(56, 189, 248, 0.4);
   color: var(--text-primary);
   background: rgba(56, 189, 248, 0.08);
+}
+
+.auto-chanlun-toggle {
+  border-color: rgba(167, 139, 250, 0.38);
+  background: rgba(167, 139, 250, 0.08);
 }
 
 .chip-dot {

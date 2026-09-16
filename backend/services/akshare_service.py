@@ -328,8 +328,10 @@ def get_kline_hist(
     adjust: qfq=前复权 hfq=后复权 None=不复权
     limit: 最多返回根数（与缠论/图表窗口对齐，纳入缓存键）
     """
-    limit = max(20, min(int(limit), 2000))
-    cache_key = f"kline:{code}:{period}:{adjust}:{limit}"
+    minute_periods = ["5", "15", "30", "60"]
+    max_limit = 5000 if period in minute_periods else 2000
+    limit = max(20, min(int(limit), max_limit))
+    cache_key = f"kline:{code}:{period}:{adjust}:{start_date or '-'}:{end_date or '-'}:{limit}"
     cached = _cache_get(cache_key)
     if cached is not None:
         return cached
@@ -337,10 +339,17 @@ def get_kline_hist(
     sym, _ = normalize_stock_code(code)
     mkt = _get_qq_market_code(code)
 
-    # 分钟数据使用新浪API
-    minute_periods = ["5", "15", "30", "60"]
+    # 分钟数据使用新浪API。该接口支持 >500 根，按日期范围请求足量数据。
     if period in minute_periods:
-        df = _get_minute_data_sina(sym, mkt, period, adjust)
+        df = _get_minute_data_sina(sym, mkt, period, adjust, limit)
+        # 失败时可能返回一个没有列的空 DataFrame；先判断，避免错误处理路径
+        # 因访问 date 列再次抛出 KeyError。
+        if not df.empty:
+            if start_date:
+                df = df[df["date"] >= pd.Timestamp(start_date)]
+            if end_date:
+                df = df[df["date"] <= pd.Timestamp(end_date) + pd.Timedelta(days=1)]
+        df = df.tail(limit).reset_index(drop=True)
         if not df.empty:
             _cache_set(cache_key, df, ttl=60)  # 分钟数据缓存60秒
         return df
@@ -413,10 +422,17 @@ def get_kline_hist(
         df = pd.DataFrame(records)
         if not df.empty:
             df['date'] = pd.to_datetime(df['date'])
+            # 腾讯接口按根数返回最新数据，开始/结束日期需在本地严格裁切，
+            # 否则历史日期筛选会错误地看到当前窗口的 K 线。
+            if start_date:
+                df = df[df["date"] >= pd.Timestamp(start_date)]
+            if end_date:
+                df = df[df["date"] <= pd.Timestamp(end_date) + pd.Timedelta(days=1)]
             if len(df) > limit:
                 df = df.tail(limit).reset_index(drop=True)
-            # 分钟数据缓存 30 秒（盘中波动大）；日线缓存 5 分钟
-            _cache_set(cache_key, df, ttl=30 if period in minute_periods else 300)
+            if not df.empty:
+                # 分钟数据缓存 30 秒（盘中波动大）；日线缓存 5 分钟
+                _cache_set(cache_key, df, ttl=30 if period in minute_periods else 300)
         return df
     except Exception as e:
         log.warning(f"K线获取失败 {code} {period}: {e}")
@@ -1718,7 +1734,13 @@ def get_minute_data(code: str, period: str = "5") -> pd.DataFrame:
 
 
 # ─── 新浪分钟数据 ─────────────────────────────────────────────────────────────
-def _get_minute_data_sina(code: str, market: str, period: str, adjust: str = "qfq") -> pd.DataFrame:
+def _get_minute_data_sina(
+    code: str,
+    market: str,
+    period: str,
+    adjust: str = "qfq",
+    limit: int = 500,
+) -> pd.DataFrame:
     """
     使用新浪API获取分钟K线数据
     period: 5, 15, 30, 60 (分钟)
@@ -1731,7 +1753,8 @@ def _get_minute_data_sina(code: str, market: str, period: str, adjust: str = "qf
     scale = scale_map.get(period, 30)
 
     # 新浪API URL
-    url = f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={sina_code}&scale={scale}&ma=no&datalen=500"
+    datalen = max(20, min(int(limit), 5000))
+    url = f"https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={sina_code}&scale={scale}&ma=no&datalen={datalen}"
 
     try:
         client = _get_client()

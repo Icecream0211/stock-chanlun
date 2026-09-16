@@ -29,8 +29,10 @@ export function prefetchSectorRouteChunks() {
   void import('../mobile/views/MobileSectorView.vue')
 }
 
+const PREFETCH_WINDOW_BARS = 180
+
 export function chanlunPrefetchKey(code: string, level = 'daily') {
-  return `GET:/chanlun/${code}?level=${level}`
+  return `GET:/chanlun/${code}?level=${level}&limit=${PREFETCH_WINDOW_BARS}`
 }
 
 export function multiLevelPrefetchKey(code: string, levels = MULTI_LEVEL_TREND_LEVELS) {
@@ -53,7 +55,7 @@ export function prefetchStockChanlun(code: string, level = 'daily') {
 
   inflightChanlun.add(key)
   void stockApi
-    .chanlun(trimmed, level)
+    .chanlun(trimmed, level, undefined, undefined, PREFETCH_WINDOW_BARS)
     .catch(() => { /* 预取失败静默 */ })
     .finally(() => inflightChanlun.delete(key))
 }

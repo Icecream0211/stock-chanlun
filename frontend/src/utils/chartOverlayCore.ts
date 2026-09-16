@@ -28,6 +28,8 @@ export type ChanlunOverlayPayload = {
 }
 
 export type ChanlunOverlayFlags = {
+  /** 总开关：关闭时不渲染任何由系统计算的缠论叠加层。 */
+  autoChanlun?: boolean
   inclusions?: boolean
   divergences?: boolean
   bis: boolean
@@ -192,6 +194,8 @@ export function buildChanlunOverlayCache(params: {
     dualCrossIndices = [],
   } = params
   const nBar = dates.length
+  // 未传时兼容历史调用，保持自动缠论绘制默认开启。
+  const autoChanlun = flags.autoChanlun !== false
   const refPx = seriesKlines.length > 0 ? seriesKlines[seriesKlines.length - 1].close : 1
   const dateLookup = buildDateLookup(dates)
   const divergenceSource = aiSignal?.divergences?.length
@@ -199,11 +203,11 @@ export function buildChanlunOverlayCache(params: {
     : (aiSignal?.divergence ? [aiSignal.divergence] : [])
 
   return {
-    inclusions: flags.inclusions ? inclusions.flatMap(item => {
+    inclusions: autoChanlun && flags.inclusions ? inclusions.flatMap(item => {
       const r = resolveBarRange(item.start, item.end, nBar, dates, dateLookup)
       return r ? [{ ...item, _s: r[0], _e: r[1] }] : []
     }) : [],
-    divergences: flags.divergences ? divergenceSource.flatMap(item => {
+    divergences: autoChanlun && flags.divergences ? divergenceSource.flatMap(item => {
       const idx = dateToIdxRobust(item.datetime, dates, dateLookup)
       if (idx < 0) return []
       const previousIdx = item.previous_datetime
@@ -211,31 +215,31 @@ export function buildChanlunOverlayCache(params: {
         : -1
       return [{ ...item, _idx: idx, ...(previousIdx >= 0 ? { _previousIdx: previousIdx } : {}) }]
     }) : [],
-    bis: flags.bis ? bis.flatMap(b => {
+    bis: autoChanlun && flags.bis ? bis.flatMap(b => {
       const r = resolveBarRange(b.start, b.end, nBar, dates, dateLookup)
       return r ? [{ ...b, _s: r[0], _e: r[1] }] : []
     }) : [],
-    biZhongshus: flags.biZhongshus ? biZhongshus.flatMap(z => {
+    biZhongshus: autoChanlun && flags.biZhongshus ? biZhongshus.flatMap(z => {
       const r = resolveBarRange(z.start, z.end, nBar, dates, dateLookup)
       return r ? [{ ...z, _s: r[0], _e: r[1] }] : []
     }) : [],
-    xiangs: flags.xiangs && xiangs ? xiangs.flatMap(x => {
+    xiangs: autoChanlun && flags.xiangs && xiangs ? xiangs.flatMap(x => {
       const r = resolveBarRange(x.start, x.end, nBar, dates, dateLookup)
       return r ? [{ ...x, _s: r[0], _e: r[1] }] : []
     }) : [],
-    zhongshus: flags.zhongshus ? zhongshus.flatMap(z => {
+    zhongshus: autoChanlun && flags.zhongshus ? zhongshus.flatMap(z => {
       const r = resolveBarRange(z.start, z.end, nBar, dates, dateLookup)
       return r ? [{ ...z, _s: r[0], _e: r[1] }] : []
     }) : [],
-    signals: flags.signals ? signals.flatMap(s => {
+    signals: autoChanlun && flags.signals ? signals.flatMap(s => {
       const ix = dateToIdxRobust(s.datetime, dates, dateLookup)
       return ix >= 0 ? [{ ...s, _idx: ix }] : []
     }) : [],
-    aiSignal: flags.aiLines ? (aiSignal ?? null) : null,
-    supportResistance: flags.supportResistance
+    aiSignal: autoChanlun && flags.aiLines ? (aiSignal ?? null) : null,
+    supportResistance: autoChanlun && flags.supportResistance
       ? simplifySupportResistanceLevels(supportResistance || [], refPx)
       : [],
-    dualCrossIndices,
+    dualCrossIndices: autoChanlun ? dualCrossIndices : [],
     _n: nBar,
   }
 }
